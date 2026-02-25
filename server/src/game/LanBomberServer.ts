@@ -92,6 +92,7 @@ interface PlayerConn {
   name: string;
   ready: boolean;
   team: number;
+  colorIndex: number; // 0-5
   state: PlayerLifeState;
   stats: PlayerStats;
   trappedUntilTick: number;
@@ -198,6 +199,14 @@ export class LanBomberServer {
   private explosionCounter = 0;
   private itemCounter = 0;
 
+  // New: game timer and death tracking
+  private gameDurationSeconds: number = 120;
+  private gameEndTick: number = 0;
+  private deathOrder: string[] = []; // player IDs in order of death
+
+  // Color slot management
+  private usedColors = new Set<number>();
+
   constructor(opts: ServerOptions) {
     this.opts = opts;
     this.log = createLogger('server', opts.logLevel);
@@ -213,6 +222,37 @@ export class LanBomberServer {
     const app = express();
     const clientDist = path.resolve(__dirname, '../../../client/dist');
     app.use(express.static(clientDist));
+
+    // Serve assets folder
+    const assestsPath = path.resolve(__dirname, '../../../assests');
+    if (fs.existsSync(assestsPath)) {
+      app.use('/assests', express.static(assestsPath));
+      this.log.info(`Serving assets from ${assestsPath}`);
+    }
+
+    // HTTP API: room info for web-mode LAN discovery (including CORS preflight)
+    app.options('/api/room', (_req, res) => {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Private-Network', 'true');
+      res.setHeader('Access-Control-Allow-Methods', 'GET');
+      res.send('');
+    });
+
+    app.get('/api/room', (_req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Private-Network', 'true');
+      res.send(JSON.stringify({
+        roomName: this.opts.roomName,
+        playerCount: this.players.size,
+        wsPort: this.opts.wsPort,
+        hostIpHint: this.hostIpHint,
+        mode: this.mode,
+        mapId: this.mapId,
+        phase: this.phase
+      }));
+    });
+
     app.get('*', (_req, res) => {
       const indexFile = path.join(clientDist, 'index.html');
       if (!fs.existsSync(indexFile)) {
@@ -259,12 +299,14 @@ export class LanBomberServer {
       }
 
       const id = randomUUID();
+      const colorIndex = this.findFreeColor();
       const player: PlayerConn = {
         id,
         ws,
         name: 'Player',
         ready: false,
         team: this.assignTeamOnJoin(),
+        colorIndex,
         state: 'Alive',
         stats: { ...DEFAULT_STATS },
         trappedUntilTick: -1,
@@ -278,7 +320,7 @@ export class LanBomberServer {
       this.players.set(id, player);
       if (!this.hostId) this.hostId = id;
 
-      this.log.info(`Client connected (${req.socket.remoteAddress}). id=${id}`);
+      this.log.info(`Client connected (${req.socket.remoteAddress}). id=${id} color=${colorIndex}`);
 
       ws.on('message', (data: Buffer | string) => {
         const str = typeof data === 'string' ? data : data.toString('utf8');
@@ -292,6 +334,7 @@ export class LanBomberServer {
 
       ws.on('close', () => {
         this.log.info(`Client disconnected id=${id}`);
+        this.usedColors.delete(player.colorIndex);
         this.players.delete(id);
         this.onPlayerLeft(id);
       });
@@ -335,6 +378,17 @@ export class LanBomberServer {
       }
       this.httpServer = null;
     }
+  }
+
+  private findFreeColor(): number {
+    for (let i = 0; i < 6; i++) {
+      if (!this.usedColors.has(i)) {
+        this.usedColors.add(i);
+        return i;
+      }
+    }
+    // Shouldn't happen (max 6 players)
+    return 0;
   }
 
   private startUdpAnnounce(): void {
@@ -394,6 +448,11 @@ export class LanBomberServer {
         }
         player.name = msg.payload.name;
         player.ready = false;
+        // Host can set the room name on join
+        if (player.id === this.hostId && msg.payload.roomName) {
+          this.opts.roomName = msg.payload.roomName;
+          this.log.info(`Room name set to "${this.opts.roomName}"`);
+        }
         this.sendRoomState();
         return;
       }
@@ -426,6 +485,14 @@ export class LanBomberServer {
         } catch (e: any) {
           this.sendTo(player.ws, { type: 'ServerError', payload: { message: e?.message ?? 'Invalid map' } });
         }
+        return;
+      }
+      case 'SetGameDuration': {
+        if (player.id !== this.hostId) return;
+        if (this.phase !== 'lobby') return;
+        this.gameDurationSeconds = msg.payload.seconds;
+        this.log.info(`Game duration set to ${this.gameDurationSeconds}s`);
+        this.sendRoomState();
         return;
       }
       case 'SetTeam': {
@@ -482,6 +549,20 @@ export class LanBomberServer {
         }
         return;
       }
+      case 'ChatSend': {
+        const text = String(msg.payload.text ?? '').trim().slice(0, 100);
+        if (!text) return;
+        this.broadcast({
+          type: 'Chat',
+          payload: {
+            playerId: player.id,
+            playerName: player.name,
+            colorIndex: player.colorIndex,
+            text
+          }
+        });
+        return;
+      }
       case 'Ping': {
         // Reply pong
         const pong: ServerToClientMessage = {
@@ -502,19 +583,27 @@ export class LanBomberServer {
     this.phase = 'starting';
     this.startTick = this.tick + TICK_RATE; // ~1 second countdown
 
+    // Build player colors map for clients
+    const playerColors: Record<string, number> = {};
+    for (const p of this.players.values()) {
+      playerColors[p.id] = p.colorIndex;
+    }
+
     const startMsg: ServerToClientMessage = {
       type: 'StartGame',
       payload: {
         seed: this.seed,
         mapId: this.mapId,
         startTick: this.startTick,
-        mode: this.mode
+        mode: this.mode,
+        gameDurationSeconds: this.gameDurationSeconds,
+        playerColors
       }
     };
     this.broadcast(startMsg);
     this.sendEvent('ServerNotice', { text: 'Starting game...' });
 
-    this.log.info(`Game starting at tick=${this.startTick}, seed=${this.seed}, map=${this.mapId}, mode=${this.mode}`);
+    this.log.info(`Game starting at tick=${this.startTick}, seed=${this.seed}, map=${this.mapId}, mode=${this.mode}, duration=${this.gameDurationSeconds}s`);
   }
 
   private resetToLobby(): void {
@@ -530,6 +619,8 @@ export class LanBomberServer {
     this.balloonCounter = 0;
     this.explosionCounter = 0;
     this.itemCounter = 0;
+    this.deathOrder = [];
+    this.gameEndTick = 0;
 
     // Reset readiness and in-game state
     for (const p of this.players.values()) {
@@ -572,7 +663,13 @@ export class LanBomberServer {
 
     if (this.phase === 'inGame') {
       this.simulate();
-      this.checkWinCondition();
+
+      // Check timer
+      if (this.gameEndTick > 0 && this.tick >= this.gameEndTick) {
+        this.checkWinCondition(true);
+      } else {
+        this.checkWinCondition(false);
+      }
     }
 
     // 20Hz snapshot
@@ -588,6 +685,10 @@ export class LanBomberServer {
 
     const preset = getMapPreset(this.mapId);
     this.buildMap(preset);
+
+    // Initialize death tracking
+    this.deathOrder = [];
+    this.gameEndTick = this.gameDurationSeconds > 0 ? this.tick + this.gameDurationSeconds * TICK_RATE : 0;
 
     // Spawn players
     const spawn = this.pickSpawnPoints(preset);
@@ -703,11 +804,6 @@ export class LanBomberServer {
     for (const p of this.players.values()) {
       if (p.state !== 'Alive') continue;
 
-      // If trapped somehow (should be state), skip
-      if (this.tick < p.invulnUntilTick) {
-        // still can move; invuln is only for damage
-      }
-
       this.simulateMovement(p);
 
       if (p.placeBalloonQueued > 0) {
@@ -752,11 +848,35 @@ export class LanBomberServer {
       }
     }
 
+    // 3.5) Kill trapped players instantly on enemy contact
+    for (const trapped of this.players.values()) {
+      if (trapped.state !== 'Trapped') continue;
+      const tpos = this.getPlayerOccupyTile(trapped);
+      for (const other of this.players.values()) {
+        if (other.id === trapped.id) continue;
+        if (other.state !== 'Alive') continue;
+        if (this.mode === 'TEAM' && other.team === trapped.team) continue;
+        const opos = this.getPlayerOccupyTile(other);
+        if (opos.x === tpos.x && opos.y === tpos.y) {
+          trapped.state = 'Dead';
+          if (!this.deathOrder.includes(trapped.id)) {
+            this.deathOrder.push(trapped.id);
+          }
+          this.sendEvent('PlayerDied', { playerId: trapped.id });
+          break;
+        }
+      }
+    }
+
     // 4) Trapped -> Dead
     for (const p of this.players.values()) {
       if (p.state !== 'Trapped') continue;
       if (p.trappedUntilTick >= 0 && this.tick >= p.trappedUntilTick) {
         p.state = 'Dead';
+        // Track death order
+        if (!this.deathOrder.includes(p.id)) {
+          this.deathOrder.push(p.id);
+        }
         this.sendEvent('PlayerDied', { playerId: p.id });
       }
     }
@@ -933,8 +1053,7 @@ export class LanBomberServer {
       }
     }
 
-    // Destroy soft blocks (done after player/bomb checks for determinism)
-    // NOTE: We must also stop propagation beyond a soft block, which is already handled in computeExplosionTiles.
+    // Destroy soft blocks
     for (const t of tiles) {
       if (this.grid[t.y][t.x] === 'SoftBlock') {
         this.grid[t.y][t.x] = 'Empty';
@@ -1012,19 +1131,54 @@ export class LanBomberServer {
     this.sendEvent('PlayerRescued', { playerId: p.id, byPlayerId: p.id });
   }
 
-  private checkWinCondition(): void {
+  private buildRanking(): Array<{ id: string; name: string; colorIndex: number }> {
+    // Survivors rank above dead; dead ranked in reverse death order (last to die = higher rank)
+    const survivors: Array<{ id: string; name: string; colorIndex: number }> = [];
+    for (const p of this.players.values()) {
+      if (p.state !== 'Dead') {
+        survivors.push({ id: p.id, name: p.name, colorIndex: p.colorIndex });
+      }
+    }
+
+    // deathOrder[0] = first to die = last place
+    // Reverse it so last-to-die comes first
+    const deadByRank: Array<{ id: string; name: string; colorIndex: number }> = [];
+    for (let i = this.deathOrder.length - 1; i >= 0; i--) {
+      const pid = this.deathOrder[i];
+      const p = this.players.get(pid);
+      if (p) {
+        deadByRank.push({ id: p.id, name: p.name, colorIndex: p.colorIndex });
+      } else {
+        // Player may have disconnected; still add to ranking with stored name
+        deadByRank.push({ id: pid, name: '(disconnected)', colorIndex: 0 });
+      }
+    }
+
+    return [...survivors, ...deadByRank];
+  }
+
+  private checkWinCondition(forceEnd: boolean = false): void {
     if (this.phase !== 'inGame') return;
 
     const aliveOrTrapped = [...this.players.values()].filter((p) => p.state !== 'Dead');
 
     if (this.mode === 'FFA') {
-      if (aliveOrTrapped.length <= 1) {
-        const winner = aliveOrTrapped[0]?.id ?? null;
+      const naturalEnd = aliveOrTrapped.length <= 1;
+      if (naturalEnd || forceEnd) {
+        // Mark remaining trapped players as dead for ranking (timer expired)
+        if (forceEnd) {
+          for (const p of this.players.values()) {
+            if (p.state === 'Trapped' && !this.deathOrder.includes(p.id)) {
+              this.deathOrder.push(p.id);
+            }
+          }
+        }
+        const winner = !forceEnd && aliveOrTrapped.length === 1 ? aliveOrTrapped[0]?.id ?? null : null;
+        const ranking = this.buildRanking();
         this.phase = 'postGame';
-        this.sendEvent('RoundEnded', { mode: 'FFA', winnerId: winner });
-        this.log.info(`Round ended (FFA). winner=${winner}`);
-        // Return to lobby after short delay
-        setTimeout(() => this.resetToLobby(), 3000);
+        this.sendEvent('RoundEnded', { mode: 'FFA', winnerId: winner, ranking });
+        this.log.info(`Round ended (FFA). winner=${winner ?? '(timer/none)'}`);
+        setTimeout(() => this.resetToLobby(), 5000);
       }
       return;
     }
@@ -1035,12 +1189,23 @@ export class LanBomberServer {
       teamAlive[p.team] = (teamAlive[p.team] ?? 0) + 1;
     }
 
-    if (teamAlive[0] === 0 || teamAlive[1] === 0) {
-      const winnerTeam = teamAlive[0] === 0 ? 1 : 0;
+    const naturalEnd = teamAlive[0] === 0 || teamAlive[1] === 0;
+    if (naturalEnd || forceEnd) {
+      if (forceEnd) {
+        for (const p of this.players.values()) {
+          if (p.state === 'Trapped' && !this.deathOrder.includes(p.id)) {
+            this.deathOrder.push(p.id);
+          }
+        }
+      }
+      const winnerTeam = forceEnd
+        ? (teamAlive[0] >= teamAlive[1] ? 0 : 1)
+        : teamAlive[0] === 0 ? 1 : 0;
+      const ranking = this.buildRanking();
       this.phase = 'postGame';
-      this.sendEvent('RoundEnded', { mode: 'TEAM', winnerTeam });
+      this.sendEvent('RoundEnded', { mode: 'TEAM', winnerTeam, ranking });
       this.log.info(`Round ended (TEAM). winnerTeam=${winnerTeam}`);
-      setTimeout(() => this.resetToLobby(), 3000);
+      setTimeout(() => this.resetToLobby(), 5000);
     }
   }
 
@@ -1095,23 +1260,36 @@ export class LanBomberServer {
       }
     }
 
+    const timeLeftSeconds =
+      this.gameEndTick > 0
+        ? Math.max(0, (this.gameEndTick - this.tick) / TICK_RATE)
+        : -1;
+
     return {
       tick: this.tick,
       players,
       balloons,
       explosions,
       items,
-      blocks
+      blocks,
+      deathOrder: [...this.deathOrder],
+      timeLeftSeconds
     };
   }
 
   private sendRoomState(): void {
     const payload: RoomStatePayload = {
-      players: [...this.players.values()].map((p) => ({ id: p.id, name: p.name, team: p.team })),
+      players: [...this.players.values()].map((p) => ({
+        id: p.id,
+        name: p.name,
+        team: p.team,
+        colorIndex: p.colorIndex
+      })),
       readyStates: Object.fromEntries([...this.players.values()].map((p) => [p.id, p.ready])),
       hostId: this.hostId,
       mode: this.mode,
-      mapId: this.mapId
+      mapId: this.mapId,
+      gameDurationSeconds: this.gameDurationSeconds
     };
 
     this.broadcast({ type: 'RoomState', payload });

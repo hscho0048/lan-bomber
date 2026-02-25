@@ -34,7 +34,7 @@ export type NetMessage<TType extends string, TPayload> = {
 // Client -> Server
 // -------------------------
 
-export type JoinRoomPayload = { name: string };
+export type JoinRoomPayload = { name: string; roomName?: string };
 export type ReadyPayload = { isReady: boolean };
 export type InputPayload = {
   seq: number;
@@ -47,8 +47,10 @@ export type InputPayload = {
 export type SetModePayload = { mode: GameMode };
 export type SetMapPayload = { mapId: string };
 export type SetTeamPayload = { team: number };
+export type SetGameDurationPayload = { seconds: number };
 export type StartRequestPayload = {};
 export type PingPayload = { clientTime: number };
+export type ChatSendPayload = { text: string };
 
 export type ClientToServerMessage =
   | NetMessage<'JoinRoom', JoinRoomPayload>
@@ -57,7 +59,9 @@ export type ClientToServerMessage =
   | NetMessage<'SetMode', SetModePayload>
   | NetMessage<'SetMap', SetMapPayload>
   | NetMessage<'SetTeam', SetTeamPayload>
+  | NetMessage<'SetGameDuration', SetGameDurationPayload>
   | NetMessage<'StartRequest', StartRequestPayload>
+  | NetMessage<'ChatSend', ChatSendPayload>
   | NetMessage<'Ping', PingPayload>;
 
 // -------------------------
@@ -68,6 +72,7 @@ export interface RoomPlayerInfo {
   id: PlayerId;
   name: string;
   team: number;
+  colorIndex: number; // 0-5, maps to CHAR_COLORS
 }
 
 export interface RoomStatePayload {
@@ -76,6 +81,7 @@ export interface RoomStatePayload {
   hostId: PlayerId;
   mode: GameMode;
   mapId: string;
+  gameDurationSeconds: number; // 30-300 in steps of 30
 }
 
 export interface StartGamePayload {
@@ -83,6 +89,8 @@ export interface StartGamePayload {
   mapId: string;
   startTick: number;
   mode: GameMode;
+  gameDurationSeconds: number;
+  playerColors: Record<PlayerId, number>; // playerId -> colorIndex (0-5)
 }
 
 export interface PlayerSnapshot {
@@ -135,6 +143,8 @@ export interface SnapshotPayload {
   explosions: ExplosionSnapshot[];
   items: ItemSnapshot[];
   blocks: BlockSnapshot[];
+  deathOrder: PlayerId[]; // player IDs in order of death (index 0 = first to die = last place)
+  timeLeftSeconds: number; // -1 if no timer, >=0 if timer active
 }
 
 export type GameEventType =
@@ -155,9 +165,22 @@ export interface EventMessagePayload {
   payload: any;
 }
 
+export interface RankEntry {
+  id: PlayerId;
+  name: string;
+  colorIndex: number;
+}
+
 export type WelcomePayload = { playerId: PlayerId; protocol: number };
 export type PongPayload = { clientTime: number; serverTime: number; tick: number };
 export type ServerErrorPayload = { message: string };
+
+export interface ChatPayload {
+  playerId: PlayerId;
+  playerName: string;
+  colorIndex: number;
+  text: string;
+}
 
 export type ServerToClientMessage =
   | NetMessage<'Welcome', WelcomePayload>
@@ -165,6 +188,7 @@ export type ServerToClientMessage =
   | NetMessage<'StartGame', StartGamePayload>
   | NetMessage<'Snapshot', SnapshotPayload>
   | NetMessage<'Event', EventMessagePayload>
+  | NetMessage<'Chat', ChatPayload>
   | NetMessage<'Pong', PongPayload>
   | NetMessage<'ServerError', ServerErrorPayload>;
 

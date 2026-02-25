@@ -65,7 +65,8 @@ export function parseClientMessage(raw: string): ClientToServerMessage | null {
       if (!isString(name)) return null;
       const trimmed = name.trim();
       if (trimmed.length < 1 || trimmed.length > NICKNAME_MAX_LEN) return null;
-      return { type: 'JoinRoom', payload: { name: trimmed } };
+      const rn = isString(payload.roomName) ? payload.roomName.trim().slice(0, ROOM_NAME_MAX_LEN) : undefined;
+      return { type: 'JoinRoom', payload: { name: trimmed, ...(rn ? { roomName: rn } : {}) } };
     }
     case 'Ready': {
       if (!isBoolean(payload.isReady)) return null;
@@ -109,8 +110,21 @@ export function parseClientMessage(raw: string): ClientToServerMessage | null {
       if (!isInt(payload.team)) return null;
       return { type: 'SetTeam', payload: { team: payload.team } };
     }
+    case 'SetGameDuration': {
+      if (!isInt(payload.seconds)) return null;
+      const secs = payload.seconds as number;
+      const valid = [30, 60, 90, 120, 150, 180, 210, 240, 270, 300];
+      if (!valid.includes(secs)) return null;
+      return { type: 'SetGameDuration', payload: { seconds: secs } };
+    }
     case 'StartRequest': {
       return { type: 'StartRequest', payload: {} };
+    }
+    case 'ChatSend': {
+      if (!isString(payload.text)) return null;
+      const text = payload.text.trim().slice(0, 100);
+      if (text.length < 1) return null;
+      return { type: 'ChatSend', payload: { text } };
     }
     case 'Ping': {
       if (!isNumber(payload.clientTime)) return null;
@@ -141,16 +155,16 @@ export function parseServerMessage(raw: string): ServerToClientMessage | null {
       if (!isGameMode(payload.mode)) return null;
       if (!isString(payload.mapId)) return null;
 
-      // Best-effort validation for players
       for (const p of payload.players) {
         if (!isRecord(p)) return null;
         if (!isString(p.id) || !isString(p.name) || !isInt(p.team)) return null;
       }
 
-      // readyStates values must be boolean
       for (const [k, val] of Object.entries(payload.readyStates)) {
         if (!isString(k) || !isBoolean(val)) return null;
       }
+
+      const gameDurationSeconds = isInt(payload.gameDurationSeconds) ? (payload.gameDurationSeconds as number) : 120;
 
       return {
         type: 'RoomState',
@@ -158,12 +172,14 @@ export function parseServerMessage(raw: string): ServerToClientMessage | null {
           players: payload.players.map((p) => ({
             id: (p as any).id,
             name: (p as any).name,
-            team: (p as any).team
+            team: (p as any).team,
+            colorIndex: isInt((p as any).colorIndex) ? (p as any).colorIndex : 0
           })),
           readyStates: payload.readyStates as Record<string, boolean>,
           hostId: payload.hostId,
           mode: payload.mode,
-          mapId: payload.mapId
+          mapId: payload.mapId,
+          gameDurationSeconds
         }
       };
     }
@@ -172,13 +188,17 @@ export function parseServerMessage(raw: string): ServerToClientMessage | null {
       if (!isString(payload.mapId)) return null;
       if (!isInt(payload.startTick)) return null;
       if (!isGameMode(payload.mode)) return null;
+      const gameDurationSeconds = isInt(payload.gameDurationSeconds) ? (payload.gameDurationSeconds as number) : 120;
+      const playerColors = isRecord(payload.playerColors) ? (payload.playerColors as Record<string, number>) : {};
       return {
         type: 'StartGame',
         payload: {
           seed: payload.seed,
           mapId: payload.mapId,
           startTick: payload.startTick,
-          mode: payload.mode
+          mode: payload.mode,
+          gameDurationSeconds,
+          playerColors
         }
       };
     }
@@ -201,6 +221,21 @@ export function parseServerMessage(raw: string): ServerToClientMessage | null {
           tick: payload.tick,
           type: payload.type as any,
           payload: (payload as any).payload
+        }
+      };
+    }
+    case 'Chat': {
+      if (!isString(payload.playerId)) return null;
+      if (!isString(payload.playerName)) return null;
+      if (!isString(payload.text)) return null;
+      const colorIndex = isInt(payload.colorIndex) ? (payload.colorIndex as number) : 0;
+      return {
+        type: 'Chat',
+        payload: {
+          playerId: payload.playerId,
+          playerName: payload.playerName,
+          colorIndex,
+          text: payload.text
         }
       };
     }

@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import { parseServerAnnounceMessage, type ServerAnnouncePayload, DEFAULT_UDP_ANNOUNCE_PORT } from '@lan-bomber/shared';
 
 let mainWindow: BrowserWindow | null = null;
-let serverProc: ReturnType<typeof spawn> | null = null;
+const serverProcs = new Map<number, ReturnType<typeof spawn>>();
 
 let discoverySocket: dgram.Socket | null = null;
 let discoveryPruneTimer: NodeJS.Timeout | null = null;
@@ -110,7 +110,7 @@ function getLocalIps(): string[] {
 }
 
 async function startServer(opts: { port: number; roomName: string; udpPort?: number; logLevel?: string }) {
-  if (serverProc) {
+  if (serverProcs.has(opts.port)) {
     return { ok: true, alreadyRunning: true };
   }
 
@@ -132,7 +132,7 @@ async function startServer(opts: { port: number; roomName: string; udpPort?: num
     },
     stdio: ['ignore', 'pipe', 'pipe']
   });
-  serverProc = proc;
+  serverProcs.set(opts.port, proc);
 
   proc.stdout.on('data', (d) => {
     const s = d.toString('utf8');
@@ -145,20 +145,20 @@ async function startServer(opts: { port: number; roomName: string; udpPort?: num
 
   proc.on('exit', (code) => {
     console.log('[server] exited', code);
-    serverProc = null;
+    serverProcs.delete(opts.port);
   });
 
   return { ok: true, alreadyRunning: false };
 }
 
-async function stopServer() {
-  if (!serverProc) return { ok: true };
-  try {
-    serverProc.kill('SIGINT');
-  } catch {
-    // ignore
+async function stopServer(port?: number) {
+  if (port !== undefined) {
+    const proc = serverProcs.get(port);
+    if (proc) { try { proc.kill('SIGINT'); } catch { /* ignore */ } serverProcs.delete(port); }
+  } else {
+    for (const [, proc] of serverProcs) { try { proc.kill('SIGINT'); } catch { /* ignore */ } }
+    serverProcs.clear();
   }
-  serverProc = null;
   return { ok: true };
 }
 
@@ -194,7 +194,7 @@ async function startDiscovery(port: number) {
     const payload = parsed.payload;
 
     const now = Date.now();
-    const key = `${rinfo.address}:${payload.wsPort}:${payload.roomName}`;
+    const key = `${rinfo.address}:${payload.wsPort}`;
     discoveredRooms.set(key, {
       ...payload,
       key,
@@ -244,7 +244,7 @@ async function stopDiscovery() {
 }
 
 ipcMain.handle('host:startServer', async (_evt, opts) => startServer(opts));
-ipcMain.handle('host:stopServer', async () => stopServer());
+ipcMain.handle('host:stopServer', async (_evt, port?: number) => stopServer(port));
 ipcMain.handle('discovery:start', async (_evt, port) => startDiscovery(port));
 ipcMain.handle('discovery:stop', async () => stopDiscovery());
 ipcMain.handle('net:getLocalIps', async () => getLocalIps());

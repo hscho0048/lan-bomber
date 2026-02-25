@@ -14,7 +14,7 @@ export type DiscoveryRoomInfo = {
 contextBridge.exposeInMainWorld('lanApi', {
   startServer: (opts: { port: number; roomName: string; udpPort?: number; logLevel?: string }) =>
     ipcRenderer.invoke('host:startServer', opts),
-  stopServer: () => ipcRenderer.invoke('host:stopServer'),
+  stopServer: (port?: number) => ipcRenderer.invoke('host:stopServer', port),
 
   startDiscovery: (port: number) => ipcRenderer.invoke('discovery:start', port),
   stopDiscovery: () => ipcRenderer.invoke('discovery:stop'),

@@ -5,7 +5,7 @@ export const SNAPSHOT_RATE = 20; // 20Hz snapshots
 export const TICK_MS = 1000 / TICK_RATE;
 export const SNAPSHOT_INTERVAL_TICKS = Math.round(TICK_RATE / SNAPSHOT_RATE); // 3
 
-export const DEFAULT_WS_PORT = 8080;
+export const DEFAULT_WS_PORT = 3000;
 export const DEFAULT_UDP_ANNOUNCE_PORT = 41234;
 
 export const BALLOON_FUSE_MS = 2500;
@@ -54,3 +54,10 @@ export const PROTOCOL_VERSION = 1;
 
 // Rendering helpers (client can override)
 export const TILE_SIZE_PX = 40;
+
+// Character color names (index 0-5)
+export const CHAR_COLORS = ['blue', 'green', 'purple', 'red', 'white', 'yellow'] as const;
+export type CharColor = (typeof CHAR_COLORS)[number];
+
+// Game duration options (seconds)
+export const GAME_DURATION_OPTIONS = [30, 60, 90, 120, 150, 180, 210, 240, 270, 300] as const;

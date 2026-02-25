@@ -34,3 +34,6 @@ Thumbs.db
 .cache/
 tmp/
 temp/
+
+# Claude Code
+.claude/
