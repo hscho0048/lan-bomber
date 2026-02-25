@@ -1,0 +1,27 @@
+Third-Party Notices
+
+This project depends on the following third-party packages:
+
+1) ws (WebSocket library for Node.js)
+   - License: MIT
+   - https://github.com/websockets/ws
+
+2) Electron
+   - License: MIT
+   - https://github.com/electron/electron
+
+3) esbuild
+   - License: MIT
+   - https://github.com/evanw/esbuild
+
+4) tsx
+   - License: MIT
+   - https://github.com/privatenumber/tsx
+
+5) TypeScript
+   - License: Apache-2.0
+   - https://github.com/microsoft/TypeScript
+
+6) @types/node
+   - License: MIT
+   - https://github.com/DefinitelyTyped/DefinitelyTyped

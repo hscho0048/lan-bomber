@@ -1,0 +1,108 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self';" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LAN Bomber</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="lobbyScreen">
+      <h1>LAN Bomber</h1>
+
+      <div class="panel">
+        <div class="row">
+          <label>Nickname</label>
+          <input id="nickname" maxlength="16" value="Player" />
+        </div>
+
+        <div class="row">
+          <label>Server IP</label>
+          <input id="serverIp" placeholder="192.168.0.x or localhost" value="localhost" />
+        </div>
+
+        <div class="row">
+          <label>Port</label>
+          <input id="serverPort" type="number" value="8080" min="1" max="65535" />
+        </div>
+
+        <div class="row">
+          <label>Room Name (host only)</label>
+          <input id="roomName" maxlength="24" value="LAN Bomber Room" />
+        </div>
+
+        <div class="row buttons">
+          <button id="btnHost">Host (Electron only)</button>
+          <button id="btnJoin">Join</button>
+          <button id="btnDisconnect" class="danger" disabled>Disconnect</button>
+        </div>
+
+        <div class="hint" id="hostIpHint"></div>
+      </div>
+
+      <div class="panel">
+        <div class="row buttons">
+          <button id="btnDiscovery">Start LAN Discovery (Electron only)</button>
+          <button id="btnStopDiscovery" class="danger" disabled>Stop Discovery</button>
+        </div>
+        <div class="hint">If discovery doesn't work, use direct IP connect (AP isolation / guest Wi‑Fi / firewall can block UDP).</div>
+        <div id="roomList" class="roomList"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Room</h2>
+        <div id="roomState"></div>
+
+        <div class="row">
+          <label><input id="readyToggle" type="checkbox" /> Ready</label>
+        </div>
+
+        <div id="hostControls" class="hostControls">
+          <div class="row">
+            <label>Mode</label>
+            <select id="modeSelect">
+              <option value="FFA">FFA</option>
+              <option value="TEAM">TEAM 3v3</option>
+            </select>
+          </div>
+
+          <div class="row">
+            <label>Map</label>
+            <select id="mapSelect">
+              <option value="map1">map1</option>
+              <option value="map2">map2</option>
+            </select>
+          </div>
+
+          <div class="row buttons">
+            <button id="btnStart" disabled>Start Game</button>
+          </div>
+        </div>
+
+        <div id="countdown" class="countdown"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Logs</h2>
+        <pre id="log" class="log"></pre>
+      </div>
+    </div>
+
+    <div id="gameScreen" class="hidden">
+      <div class="topBar">
+        <div id="hudTop"></div>
+        <div>
+          <button id="btnLeave" class="danger">Leave to Lobby</button>
+        </div>
+      </div>
+      <canvas id="gameCanvas" width="960" height="640"></canvas>
+      <div class="bottomBar">
+        <div id="debug"></div>
+        <div class="hint">Controls: WASD/Arrow Keys + Space (place balloon)</div>
+      </div>
+    </div>
+
+    <script src="renderer.js"></script>
+  </body>
+</html>
