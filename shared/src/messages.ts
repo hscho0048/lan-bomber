@@ -9,7 +9,7 @@ export type PlayerLifeState = 'Alive' | 'Trapped' | 'Dead';
 
 export type BlockKind = 'SolidWall' | 'SoftBlock';
 
-export type ItemType = 'Speed' | 'Balloon' | 'Power';
+export type ItemType = 'Speed' | 'Balloon' | 'Power' | 'Needle';
 
 export interface XY {
   x: number;
@@ -41,6 +41,7 @@ export type InputPayload = {
   tick: number;
   moveDir: MoveDir;
   placeBalloon: boolean;
+  useNeedleSlot: -1 | 0 | 1 | 2;
 };
 
 export type SetModePayload = { mode: GameMode };

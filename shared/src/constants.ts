@@ -24,18 +24,21 @@ export interface PlayerStats {
   speed: number; // tiles per second
   balloonCount: number;
   power: number;
+  needle: number;
 }
 
 export const DEFAULT_STATS: PlayerStats = {
   speed: 3.0,
   balloonCount: 1,
-  power: 2
+  power: 2,
+  needle: 0
 };
 
 export const STAT_CAPS: PlayerStats = {
   speed: 6.0,
   balloonCount: 6,
-  power: 6
+  power: 6,
+  needle: 3
 };
 
 export const ITEM_DROP_CHANCE = 0.35;

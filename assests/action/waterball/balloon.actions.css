@@ -1,0 +1,16 @@
+/* actions/balloon.actions.css */
+
+/* 공통: 기준점 아래쪽 고정 */
+.anim-origin-bottom {
+  transform-origin: 50% 90%;
+}
+
+/* 젤리 꿀렁 */
+@keyframes balloon-breathe {
+  0%, 100% { transform: scale(1, 1); }
+  50%      { transform: scale(1.06, 0.94); }
+}
+
+.anim-balloon-breathe {
+  animation: balloon-breathe 1.2s ease-in-out infinite;
+}

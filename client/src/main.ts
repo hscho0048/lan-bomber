@@ -65,7 +65,7 @@ function setupDevAutoReload() {
 
 function getLocalIps(): string[] {
   const nets = os.networkInterfaces();
-  const out: string[] = [];
+  const out: Array<{ name: string; ip: string }> = [];
   for (const name of Object.keys(nets)) {
     const list = nets[name];
     if (!list) continue;
@@ -73,10 +73,40 @@ function getLocalIps(): string[] {
       if (net.family !== 'IPv4') continue;
       if (net.internal) continue;
       if (net.address.startsWith('169.254.')) continue;
-      out.push(net.address);
+      out.push({ name, ip: net.address });
     }
   }
-  return out;
+
+  const isPrivateLan = (ip: string): boolean => {
+    if (ip.startsWith('10.')) return true;
+    if (ip.startsWith('192.168.')) return true;
+    if (ip.startsWith('172.')) {
+      const parts = ip.split('.');
+      const second = Number(parts[1]);
+      return second >= 16 && second <= 31;
+    }
+    return false;
+  };
+
+  const adapterScore = (name: string): number => {
+    const n = name.toLowerCase();
+    if (n.includes('wi-fi') || n.includes('wireless') || n.includes('wlan')) return 0;
+    if (n.includes('ethernet')) return 1;
+    if (n.includes('vpn') || n.includes('nord') || n.includes('tun') || n.includes('tap') || n.includes('vethernet')) return 3;
+    return 2;
+  };
+
+  out.sort((a, b) => {
+    const lanA = isPrivateLan(a.ip) ? 0 : 1;
+    const lanB = isPrivateLan(b.ip) ? 0 : 1;
+    if (lanA !== lanB) return lanA - lanB;
+    const scoreA = adapterScore(a.name);
+    const scoreB = adapterScore(b.name);
+    if (scoreA !== scoreB) return scoreA - scoreB;
+    return a.name.localeCompare(b.name);
+  });
+
+  return out.map((x) => x.ip);
 }
 
 async function startServer(opts: { port: number; roomName: string; udpPort?: number; logLevel?: string }) {

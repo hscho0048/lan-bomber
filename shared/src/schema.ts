@@ -76,13 +76,22 @@ export function parseClientMessage(raw: string): ClientToServerMessage | null {
       if (!isInt(payload.tick) || payload.tick < 0) return null;
       if (!isMoveDir(payload.moveDir)) return null;
       if (!isBoolean(payload.placeBalloon)) return null;
+      const useNeedleSlotRaw = payload.useNeedleSlot;
+      const useNeedleSlot =
+        useNeedleSlotRaw === undefined
+          ? -1
+          : isInt(useNeedleSlotRaw) && useNeedleSlotRaw >= -1 && useNeedleSlotRaw <= 2
+            ? useNeedleSlotRaw
+            : null;
+      if (useNeedleSlot === null) return null;
       return {
         type: 'Input',
         payload: {
           seq: payload.seq,
           tick: payload.tick,
           moveDir: payload.moveDir,
-          placeBalloon: payload.placeBalloon
+          placeBalloon: payload.placeBalloon,
+          useNeedleSlot: useNeedleSlot as -1 | 0 | 1 | 2
         }
       };
     }

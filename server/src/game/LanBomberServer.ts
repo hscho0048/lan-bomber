@@ -37,6 +37,13 @@ import {
 } from '@lan-bomber/shared';
 import { parseClientMessage } from '@lan-bomber/shared';
 import { RNG } from '@lan-bomber/shared';
+import {
+  canEnterTile as canEnterTileSystem,
+  getPlayerOccupyTile as getPlayerOccupyTileSystem,
+  getPlayerRenderPos as getPlayerRenderPosSystem,
+  simulateMovement as simulateMovementSystem
+} from './systems/movement';
+import { applyItem as applyItemSystem, findItemAt as findItemAtSystem, rollItemType as rollItemTypeSystem } from './systems/items';
 
 type LogLevel = 'info' | 'debug';
 
@@ -103,32 +110,13 @@ interface ServerOptions {
   logLevel: LogLevel;
 }
 
-function clamp(n: number, a: number, b: number): number {
-  return Math.max(a, Math.min(b, n));
-}
-
 function keyXY(x: number, y: number): string {
   return `${x},${y}`;
 }
 
-function dirToDelta(dir: MoveDir): { dx: number; dy: number } {
-  switch (dir) {
-    case 'Up':
-      return { dx: 0, dy: -1 };
-    case 'Down':
-      return { dx: 0, dy: 1 };
-    case 'Left':
-      return { dx: -1, dy: 0 };
-    case 'Right':
-      return { dx: 1, dy: 0 };
-    default:
-      return { dx: 0, dy: 0 };
-  }
-}
-
 function getLocalIPv4(): string {
   const nets = os.networkInterfaces();
-  const candidates: string[] = [];
+  const candidates: Array<{ name: string; ip: string }> = [];
   for (const name of Object.keys(nets)) {
     const list = nets[name];
     if (!list) continue;
@@ -137,10 +125,40 @@ function getLocalIPv4(): string {
       if (net.internal) continue;
       // Skip link-local
       if (net.address.startsWith('169.254.')) continue;
-      candidates.push(net.address);
+      candidates.push({ name, ip: net.address });
     }
   }
-  return candidates[0] ?? '0.0.0.0';
+
+  const isPrivateLan = (ip: string): boolean => {
+    if (ip.startsWith('10.')) return true;
+    if (ip.startsWith('192.168.')) return true;
+    if (ip.startsWith('172.')) {
+      const parts = ip.split('.');
+      const second = Number(parts[1]);
+      return second >= 16 && second <= 31;
+    }
+    return false;
+  };
+
+  const adapterScore = (name: string): number => {
+    const n = name.toLowerCase();
+    if (n.includes('wi-fi') || n.includes('wireless') || n.includes('wlan')) return 0;
+    if (n.includes('ethernet')) return 1;
+    if (n.includes('vpn') || n.includes('nord') || n.includes('tun') || n.includes('tap') || n.includes('vethernet')) return 3;
+    return 2;
+  };
+
+  candidates.sort((a, b) => {
+    const lanA = isPrivateLan(a.ip) ? 0 : 1;
+    const lanB = isPrivateLan(b.ip) ? 0 : 1;
+    if (lanA !== lanB) return lanA - lanB;
+    const scoreA = adapterScore(a.name);
+    const scoreB = adapterScore(b.name);
+    if (scoreA !== scoreB) return scoreA - scoreB;
+    return a.name.localeCompare(b.name);
+  });
+
+  return candidates[0]?.ip ?? '0.0.0.0';
 }
 
 export class LanBomberServer {
@@ -459,6 +477,9 @@ export class LanBomberServer {
         if (msg.payload.placeBalloon) {
           player.placeBalloonQueued = Math.min(3, player.placeBalloonQueued + 1); // small cap
         }
+        if (msg.payload.useNeedleSlot >= 0) {
+          this.tryUseNeedle(player, msg.payload.useNeedleSlot);
+        }
         return;
       }
       case 'Ping': {
@@ -752,112 +773,31 @@ export class LanBomberServer {
   }
 
   private simulateMovement(p: PlayerConn): void {
-    const speedTilesPerSec = clamp(p.stats.speed, 1.0, 10.0);
-    const step = speedTilesPerSec / TICK_RATE;
-
-    // If currently moving, advance
-    if (p.move.moving) {
-      p.move.t += step;
-
-      while (p.move.moving && p.move.t >= 1) {
-        // Commit arrival
-        const prevX = p.move.fromX;
-        const prevY = p.move.fromY;
-        p.move.fromX = p.move.toX;
-        p.move.fromY = p.move.toY;
-        p.move.t -= 1;
-
-        // Leaving a balloon tile removes passthrough
-        const prevKey = keyXY(prevX, prevY);
-        const balloonId = this.balloonsByPos.get(prevKey);
-        if (balloonId) {
-          const b = this.balloons.get(balloonId);
-          if (b) b.passableBy.delete(p.id);
-        }
-
-        // Attempt to continue movement from the new tile
-        const dir = p.inputDir;
-        if (dir === 'None') {
-          p.move.moving = false;
-          p.move.toX = p.move.fromX;
-          p.move.toY = p.move.fromY;
-          p.move.dir = 'None';
-          p.move.t = 0;
-          break;
-        }
-        const { dx, dy } = dirToDelta(dir);
-        const nx = p.move.fromX + dx;
-        const ny = p.move.fromY + dy;
-        if (this.canEnterTile(nx, ny, p.id)) {
-          p.move.toX = nx;
-          p.move.toY = ny;
-          p.move.dir = dir;
-          p.move.moving = true;
-          // continue loop if t>=1
-        } else {
-          // Stop at tile center
-          p.move.moving = false;
-          p.move.toX = p.move.fromX;
-          p.move.toY = p.move.fromY;
-          p.move.dir = 'None';
-          p.move.t = 0;
-          break;
-        }
-      }
-
-      if (!p.move.moving) return;
-
-      // Mid-step: ignore direction changes until next tile
-      return;
-    }
-
-    // Not moving: attempt to start
-    const dir = p.inputDir;
-    if (dir === 'None') return;
-    const { dx, dy } = dirToDelta(dir);
-    const nx = p.move.fromX + dx;
-    const ny = p.move.fromY + dy;
-    if (!this.canEnterTile(nx, ny, p.id)) return;
-
-    p.move.moving = true;
-    p.move.dir = dir;
-    p.move.toX = nx;
-    p.move.toY = ny;
-    p.move.t = 0;
-
-    // Apply some progress immediately
-    p.move.t += step;
+    simulateMovementSystem(p, {
+      width: this.width,
+      height: this.height,
+      grid: this.grid,
+      balloonsByPos: this.balloonsByPos,
+      balloons: this.balloons
+    });
   }
 
   private canEnterTile(x: number, y: number, playerId: string): boolean {
-    if (x < 0 || y < 0 || x >= this.width || y >= this.height) return false;
-    const tile = this.grid[y][x];
-    if (tile !== 'Empty') return false;
-
-    // Balloons block entry unless passthrough is enabled
-    const bid = this.balloonsByPos.get(keyXY(x, y));
-    if (bid) {
-      const b = this.balloons.get(bid);
-      if (b && !b.passableBy.has(playerId)) return false;
-    }
-
-    return true;
+    return canEnterTileSystem(x, y, playerId, {
+      width: this.width,
+      height: this.height,
+      grid: this.grid,
+      balloonsByPos: this.balloonsByPos,
+      balloons: this.balloons
+    });
   }
 
   private getPlayerOccupyTile(p: PlayerConn): { x: number; y: number } {
-    if (!p.move.moving) return { x: p.move.fromX, y: p.move.fromY };
-    // Grid-based occupancy: whichever tile is closer
-    return p.move.t >= 0.5 ? { x: p.move.toX, y: p.move.toY } : { x: p.move.fromX, y: p.move.fromY };
+    return getPlayerOccupyTileSystem(p);
   }
 
   private getPlayerRenderPos(p: PlayerConn): { x: number; y: number } {
-    const fx = p.move.fromX + 0.5;
-    const fy = p.move.fromY + 0.5;
-    if (!p.move.moving) return { x: fx, y: fy };
-    const tx = p.move.toX + 0.5;
-    const ty = p.move.toY + 0.5;
-    const t = clamp(p.move.t, 0, 1);
-    return { x: fx + (tx - fx) * t, y: fy + (ty - fy) * t };
+    return getPlayerRenderPosSystem(p);
   }
 
   private tryPlaceBalloon(p: PlayerConn): void {
@@ -1041,31 +981,35 @@ export class LanBomberServer {
   }
 
   private rollItemType(): ItemType {
-    const r = this.rng.next();
-    if (r < 0.34) return 'Speed';
-    if (r < 0.67) return 'Balloon';
-    return 'Power';
+    return rollItemTypeSystem(() => this.rng.next());
   }
 
   private findItemAt(x: number, y: number): string | null {
-    for (const [id, it] of this.items.entries()) {
-      if (it.x === x && it.y === y) return id;
-    }
-    return null;
+    return findItemAtSystem(this.items, x, y);
   }
 
   private applyItem(p: PlayerConn, item: Item): void {
-    switch (item.itemType) {
-      case 'Speed':
-        p.stats.speed = clamp(p.stats.speed + 0.5, 1.0, 6.0);
-        break;
-      case 'Balloon':
-        p.stats.balloonCount = clamp(p.stats.balloonCount + 1, 1, 6);
-        break;
-      case 'Power':
-        p.stats.power = clamp(p.stats.power + 1, 1, 6);
-        break;
-    }
+    applyItemSystem(p, item);
+  }
+
+  private tryUseNeedle(p: PlayerConn, slot: number): void {
+    if (this.phase !== 'inGame') return;
+    if (p.state !== 'Trapped') return;
+    if (slot < 0 || slot > 2) return;
+    if (p.stats.needle <= slot) return;
+    if (p.stats.needle <= 0) return;
+
+    p.stats.needle -= 1;
+    p.state = 'Alive';
+    p.trappedUntilTick = -1;
+    p.invulnUntilTick = this.tick + RESCUE_INVULN_TICKS;
+    p.inputDir = 'None';
+    p.placeBalloonQueued = 0;
+
+    const occ = this.getPlayerOccupyTile(p);
+    p.move = { moving: false, fromX: occ.x, fromY: occ.y, toX: occ.x, toY: occ.y, dir: 'None', t: 0 };
+
+    this.sendEvent('PlayerRescued', { playerId: p.id, byPlayerId: p.id });
   }
 
   private checkWinCondition(): void {
