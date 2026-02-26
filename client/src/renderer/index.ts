@@ -10,9 +10,7 @@ import {
   type ClientToServerMessage,
   type EventMessagePayload,
   type GameMode,
-  type RoomStatePayload,
-  type SnapshotPayload,
-  type StartGamePayload
+  type SnapshotPayload
 } from '@lan-bomber/shared';
 import { getRendererElements, setScreen } from './dom';
 import { drawGameFrame, preloadAssets } from './gameView';
@@ -25,53 +23,235 @@ import {
   renderResultScreen
 } from './lobbyView';
 import { createLogger } from './logger';
+import { createGameState, type GameState, type Notification } from './state';
 
 const el = getRendererElements();
 const ctx = el.canvas.getContext('2d')!;
-
 const logLine = createLogger(el.log, 'info');
 const input = createInputController();
 
-let ws: WebSocket | null = null;
-let myId: string | null = null;
-const hostedPorts = new Map<number, string>(); // port → roomName
+const state: GameState = createGameState();
 
-let roomState: RoomStatePayload | null = null;
-let startGame: StartGamePayload | null = null;
-let currentRoomName = 'LAN Bomber 방';
-let pendingHostRoomName: string | null = null; // set when hosting, sent in JoinRoom
-
-let snapshotPrev: SnapshotPayload | null = null;
-let snapshotCurr: SnapshotPayload | null = null;
-let snapshotInterpStart = 0;
-let snapshotInterpDuration = 1000 / SNAPSHOT_RATE;
-
-let serverTickEstimate = 0;
-let pingMs = 0;
-let inputSeq = 0;
-
-// Local tick clock: track when the last snapshot arrived so we can
-// interpolate the current server tick between snapshot updates (20Hz → 60Hz).
-let lastSnapshotTick = 0;
-let lastSnapshotArrivalTime = 0;
-
-// Input rate limiter for the rAF-integrated input loop
-const INPUT_INTERVAL_MS = 1000 / INPUT_SEND_RATE;
-let lastInputSentTime = 0;
-
+const hostedPorts = new Map<number, string>(); // port → roomName (Electron only)
 let discoveryUnsub: (() => void) | null = null;
+let webScanInterval: ReturnType<typeof setInterval> | null = null;
+
 const lanApi = window.lanApi;
 const isElectronClient = !!lanApi;
+
+const INPUT_INTERVAL_MS = 1000 / INPUT_SEND_RATE;
 
 // ========================
 // Helpers
 // ========================
 
-function refreshRoomStateUI() {
-  renderRoomState(el, roomState, myId, send, currentRoomName);
+function send(msg: ClientToServerMessage) {
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+  state.ws.send(stringifyMessage(msg));
 }
 
-function renderHostedRooms() {
+function refreshRoomStateUI() {
+  renderRoomState(el, state.roomState, state.myId, send, state.currentRoomName);
+}
+
+function buildPlayerTeams(gs: GameState): Record<string, number> {
+  const map: Record<string, number> = {};
+  if (gs.startGame?.mode === 'TEAM' && gs.roomState) {
+    for (const p of gs.roomState.players) map[p.id] = p.team;
+  }
+  return map;
+}
+
+function pushNotification(gs: GameState, text: string, ttl = 2500): void {
+  const n: Notification = { text, createdAt: performance.now(), ttl };
+  gs.notifications.push(n);
+  // Expire old ones eagerly (keep at most 10)
+  if (gs.notifications.length > 10) gs.notifications.shift();
+}
+
+// ========================
+// Snapshot handler
+// ========================
+
+function onSnapshot(snap: SnapshotPayload, gs: GameState): void {
+  const now = performance.now();
+  gs.lastSnapTick = snap.tick;
+  gs.lastSnapArrival = now;
+  gs.serverTick = snap.tick;
+
+  if (!gs.snap.curr) {
+    gs.snap.curr = snap;
+    gs.snap.prev = null;
+    gs.snap.interpStart = now;
+    gs.snap.interpDuration = 1000 / SNAPSHOT_RATE;
+    return;
+  }
+
+  gs.snap.prev = gs.snap.curr;
+  gs.snap.curr = snap;
+  gs.snap.interpStart = now;
+
+  const dtTicks = Math.max(1, gs.snap.curr.tick - gs.snap.prev.tick);
+  gs.snap.interpDuration = (dtTicks * 1000) / TICK_RATE;
+}
+
+// ========================
+// Event handler
+// ========================
+
+function onEvent(ev: EventMessagePayload, gs: GameState): void {
+  if (ev.type === 'RoundEnded') {
+    const ranking: Array<{ id: string; name: string; colorIndex: number; team?: number }> = ev.payload.ranking ?? [];
+    if (ev.payload.mode === 'TEAM') {
+      renderResultScreen(el, ranking, gs.myId, false, ev.payload.winnerTeam as number);
+    } else {
+      renderResultScreen(el, ranking, gs.myId, !ev.payload.winnerId);
+    }
+    setScreen(el, 'result');
+    return;
+  }
+
+  if (ev.type === 'ServerNotice') {
+    addSystemMessage(el, ev.payload.text ?? '');
+  }
+
+  if (ev.type === 'PlayerDied') {
+    const playerId: string = ev.payload.playerId ?? '';
+    const player = gs.roomState?.players.find(p => p.id === playerId);
+    if (player) {
+      addSystemMessage(el, `${player.name} 탈락!`);
+      pushNotification(gs, `💀 ${player.name} 탈락!`);
+    }
+  }
+
+  if (ev.type === 'PlayerRescued') {
+    const rescuedId: string = ev.payload.playerId ?? '';
+    const rescuerId: string = ev.payload.byPlayerId ?? '';
+    const rescued = gs.roomState?.players.find(p => p.id === rescuedId);
+    const rescuer = gs.roomState?.players.find(p => p.id === rescuerId);
+    if (rescued && rescuer) {
+      if (rescuedId !== rescuerId) {
+        addSystemMessage(el, `${rescuer.name}가 ${rescued.name}를 구출했습니다!`);
+        pushNotification(gs, `💪 ${rescuer.name}→${rescued.name} 구출!`);
+      }
+    }
+  }
+}
+
+// ========================
+// WebSocket message handler
+// ========================
+
+function handleServerMessage(rawData: string, gs: GameState): void {
+  const msg = parseServerMessage(rawData);
+  if (!msg) return;
+
+  switch (msg.type) {
+    case 'Welcome': {
+      gs.myId = msg.payload.playerId;
+      logLine('info', `Welcome. id=${gs.myId}`);
+      break;
+    }
+    case 'RoomState': {
+      gs.roomState = msg.payload;
+      refreshRoomStateUI();
+      break;
+    }
+    case 'StartGame': {
+      gs.startGame = msg.payload;
+      gs.snap.prev = null;
+      gs.snap.curr = null;
+      gs.snap.interpStart = performance.now();
+      gs.snap.interpDuration = 1000 / SNAPSHOT_RATE;
+      gs.serverTick = gs.startGame.startTick;
+      gs.notifications = [];
+      logLine('info', `StartGame: map=${gs.startGame.mapId} mode=${gs.startGame.mode} duration=${gs.startGame.gameDurationSeconds}s`);
+      setScreen(el, 'game');
+      break;
+    }
+    case 'Snapshot': {
+      onSnapshot(msg.payload, gs);
+      break;
+    }
+    case 'Event': {
+      onEvent(msg.payload, gs);
+      break;
+    }
+    case 'Chat': {
+      const chat = msg.payload;
+      addChatMessage(el, chat.playerName, chat.colorIndex, chat.text);
+      break;
+    }
+    case 'Pong': {
+      gs.pingMs = Math.max(0, performance.now() - msg.payload.clientTime);
+      gs.serverTick = msg.payload.tick;
+      break;
+    }
+    case 'ServerError': {
+      logLine('info', `ServerError: ${msg.payload.message}`);
+      addSystemMessage(el, `오류: ${msg.payload.message}`);
+      break;
+    }
+  }
+}
+
+// ========================
+// Connection
+// ========================
+
+function connect(ip: string, port: number): void {
+  if (state.ws) { state.ws.close(); state.ws = null; }
+
+  const url = `ws://${ip}:${port}`;
+  logLine('info', `Connecting to ${url}...`);
+  state.ws = new WebSocket(url);
+
+  state.ws.onopen = () => {
+    logLine('info', 'Connected.');
+    el.btnDisconnect.disabled = false;
+    const payload: { name: string; roomName?: string } = { name: el.nickname.value.trim() || 'Player' };
+    if (state.pendingHostRoomName) {
+      payload.roomName = state.pendingHostRoomName;
+      state.pendingHostRoomName = null;
+    }
+    send({ type: 'JoinRoom', payload });
+    const savedSkin = localStorage.getItem('playerSkin');
+    if (savedSkin) send({ type: 'SetSkin', payload: { skin: savedSkin } });
+  };
+
+  state.ws.onmessage = (ev) => handleServerMessage(String(ev.data), state);
+
+  state.ws.onclose = () => {
+    logLine('info', 'Disconnected.');
+    state.ws = null;
+    state.myId = null;
+    state.roomState = null;
+    state.startGame = null;
+    state.snap.prev = null;
+    state.snap.curr = null;
+    el.btnDisconnect.disabled = true;
+    refreshRoomStateUI();
+    setScreen(el, 'main');
+  };
+
+  state.ws.onerror = () => logLine('info', 'WebSocket error.');
+
+  setScreen(el, 'room');
+  el.chatMessages.innerHTML = '';
+  addSystemMessage(el, `${ip}:${port} 에 연결 중...`);
+}
+
+function disconnect(): void {
+  if (!state.ws) return;
+  state.ws.close();
+  state.ws = null;
+}
+
+// ========================
+// Hosted room list (Electron)
+// ========================
+
+function renderHostedRooms(): void {
   const container = document.getElementById('hostedRoomList');
   if (!container) return;
   container.innerHTML = '';
@@ -84,10 +264,7 @@ function renderHostedRooms() {
     const joinBtn = document.createElement('button');
     joinBtn.className = 'btn btn-secondary btn-sm';
     joinBtn.textContent = '접속';
-    joinBtn.onclick = () => {
-      el.serverIp.value = 'localhost';
-      connect('localhost', port);
-    };
+    joinBtn.onclick = () => { el.serverIp.value = 'localhost'; connect('localhost', port); };
     const stopBtn = document.createElement('button');
     stopBtn.className = 'btn btn-danger btn-sm';
     stopBtn.textContent = '중지';
@@ -96,7 +273,7 @@ function renderHostedRooms() {
       hostedPorts.delete(port);
       renderHostedRooms();
       logLine('info', `포트 ${port} 서버 중지됨.`);
-      if (ws && ws.url.includes(`:${port}`)) disconnect();
+      if (state.ws && state.ws.url.includes(`:${port}`)) disconnect();
     };
     item.appendChild(info);
     item.appendChild(joinBtn);
@@ -105,235 +282,22 @@ function renderHostedRooms() {
   }
 }
 
-function send(msg: ClientToServerMessage) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(stringifyMessage(msg));
-}
-
-function onSnapshot(snap: SnapshotPayload) {
-  const now = performance.now();
-  lastSnapshotTick = snap.tick;
-  lastSnapshotArrivalTime = now;
-  serverTickEstimate = snap.tick;
-
-  if (!snapshotCurr) {
-    snapshotCurr = snap;
-    snapshotPrev = null;
-    snapshotInterpStart = now;
-    snapshotInterpDuration = 1000 / SNAPSHOT_RATE;
-    return;
-  }
-
-  snapshotPrev = snapshotCurr;
-  snapshotCurr = snap;
-  snapshotInterpStart = now;
-
-  const dtTicks = Math.max(1, snapshotCurr.tick - snapshotPrev.tick);
-  snapshotInterpDuration = (dtTicks * 1000) / TICK_RATE;
-}
-
-function onEvent(ev: EventMessagePayload) {
-  if (ev.type === 'RoundEnded') {
-    const ranking: Array<{ id: string; name: string; colorIndex: number }> = ev.payload.ranking ?? [];
-    // Draw = FFA with no single winner (timer ran out or everyone died simultaneously)
-    const isDraw = ev.payload.mode === 'FFA' && !ev.payload.winnerId;
-    renderResultScreen(el, ranking, myId, isDraw);
-    setScreen(el, 'result');
-    return;
-  }
-  if (ev.type === 'ServerNotice') {
-    addSystemMessage(el, ev.payload.text ?? '');
-  }
-  if (ev.type === 'PlayerDied') {
-    const playerId: string = ev.payload.playerId ?? '';
-    const player = roomState?.players.find(p => p.id === playerId);
-    if (player) addSystemMessage(el, `${player.name} 탈락!`);
-  }
-}
-
 // ========================
-// Connection
+// LAN discovery (Web mode)
 // ========================
-
-function connect(ip: string, port: number) {
-  if (ws) {
-    ws.close();
-    ws = null;
-  }
-
-  const url = `ws://${ip}:${port}`;
-  logLine('info', `Connecting to ${url}...`);
-
-  ws = new WebSocket(url);
-
-  ws.onopen = () => {
-    logLine('info', 'Connected.');
-    el.btnDisconnect.disabled = false;
-    const payload: { name: string; roomName?: string } = { name: el.nickname.value.trim() || 'Player' };
-    if (pendingHostRoomName) {
-      payload.roomName = pendingHostRoomName;
-      pendingHostRoomName = null;
-    }
-    send({ type: 'JoinRoom', payload });
-    // Send saved skin so other players see our character immediately
-    const savedSkin = localStorage.getItem('playerSkin');
-    if (savedSkin) send({ type: 'SetSkin', payload: { skin: savedSkin } });
-  };
-
-  ws.onmessage = (ev) => {
-    const msg = parseServerMessage(String(ev.data));
-    if (!msg) return;
-
-    switch (msg.type) {
-      case 'Welcome': {
-        myId = msg.payload.playerId;
-        logLine('info', `Welcome. id=${myId}`);
-        break;
-      }
-      case 'RoomState': {
-        roomState = msg.payload;
-        refreshRoomStateUI();
-
-        // If we were in game and got room state, game ended → show result screen handled by RoundEnded event
-        // If already on result screen, don't go back to room automatically
-        // But if we're on game screen, return to room screen
-        break;
-      }
-      case 'StartGame': {
-        startGame = msg.payload;
-        snapshotPrev = null;
-        snapshotCurr = null;
-        snapshotInterpStart = performance.now();
-        snapshotInterpDuration = 1000 / SNAPSHOT_RATE;
-        serverTickEstimate = startGame.startTick;
-        logLine('info', `StartGame: map=${startGame.mapId} mode=${startGame.mode} duration=${startGame.gameDurationSeconds}s`);
-        setScreen(el, 'game');
-        break;
-      }
-      case 'Snapshot': {
-        onSnapshot(msg.payload);
-        break;
-      }
-      case 'Event': {
-        onEvent(msg.payload);
-        break;
-      }
-      case 'Chat': {
-        const chat = msg.payload;
-        addChatMessage(el, chat.playerName, chat.colorIndex, chat.text);
-        break;
-      }
-      case 'Pong': {
-        pingMs = Math.max(0, performance.now() - msg.payload.clientTime);
-        serverTickEstimate = msg.payload.tick;
-        break;
-      }
-      case 'ServerError': {
-        logLine('info', `ServerError: ${msg.payload.message}`);
-        addSystemMessage(el, `오류: ${msg.payload.message}`);
-        break;
-      }
-    }
-  };
-
-  ws.onclose = () => {
-    logLine('info', 'Disconnected.');
-    ws = null;
-    myId = null;
-    roomState = null;
-    startGame = null;
-    snapshotPrev = null;
-    snapshotCurr = null;
-    el.btnDisconnect.disabled = true;
-    refreshRoomStateUI();
-    setScreen(el, 'main');
-  };
-
-  ws.onerror = () => {
-    logLine('info', 'WebSocket error.');
-  };
-
-  // Transition to room screen when connected
-  setScreen(el, 'room');
-  // Clear chat
-  el.chatMessages.innerHTML = '';
-  addSystemMessage(el, `${ip}:${port} 에 연결 중...`);
-}
-
-function disconnect() {
-  if (!ws) return;
-  ws.close();
-  ws = null;
-}
-
-// ========================
-// Ping loop
-// ========================
-
-function startPingLoop() {
-  setInterval(() => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    send({ type: 'Ping', payload: { clientTime: performance.now() } });
-  }, 500);
-}
-
-function startWebRoomPolling(host: string, port: number) {
-  const url = `http://${host}:${port}/api/room`;
-
-  async function poll() {
-    // Only show room list on main screen and when not connected
-    if (ws && ws.readyState === WebSocket.OPEN) return;
-    try {
-      const res = await fetch(url);
-      if (!res.ok) return;
-      const data = await res.json();
-      const room = {
-        roomName: data.roomName ?? 'LAN Bomber 방',
-        playerCount: data.playerCount ?? 0,
-        wsPort: data.wsPort ?? port,
-        hostIpHint: data.hostIpHint ?? '',
-        mode: data.mode ?? 'FFA',
-        mapId: data.mapId ?? 'map1',
-        remoteAddress: host,
-        lastSeen: Date.now()
-      };
-      renderRooms(el, [room], (ip, p) => {
-        el.serverIp.value = ip;
-        el.serverPort.value = String(p);
-        connect(ip, p);
-      });
-    } catch {
-      // server not reachable yet; keep trying
-    }
-  }
-
-  poll();
-  setInterval(poll, 2000);
-}
-
-let webScanInterval: ReturnType<typeof setInterval> | null = null;
 
 async function runWebLanScan(port: number): Promise<void> {
-  if (ws && ws.readyState === WebSocket.OPEN) return;
+  if (state.ws && state.ws.readyState === WebSocket.OPEN) return;
 
-  // Determine which subnet(s) to scan
   const hostname = window.location.hostname;
   const prefixes: string[] = [];
   if (hostname && hostname !== 'localhost' && hostname !== '127.0.0.1') {
     const parts = hostname.split('.');
-    if (parts.length === 4) {
-      prefixes.push(parts.slice(0, 3).join('.') + '.');
-    }
+    if (parts.length === 4) prefixes.push(parts.slice(0, 3).join('.') + '.');
   }
-  if (prefixes.length === 0) {
-    // Common home router subnets
-    prefixes.push('192.168.0.', '192.168.1.', '10.0.0.', '10.0.1.');
-  }
+  if (prefixes.length === 0) prefixes.push('192.168.0.', '192.168.1.', '10.0.0.', '10.0.1.');
 
-  const ips = prefixes.flatMap(p =>
-    Array.from({ length: 254 }, (_, i) => p + (i + 1))
-  );
-
+  const ips = prefixes.flatMap(p => Array.from({ length: 254 }, (_, i) => p + (i + 1)));
   const found: Array<{ ip: string; data: any }> = [];
 
   await Promise.allSettled(ips.map(async ip => {
@@ -341,16 +305,10 @@ async function runWebLanScan(port: number): Promise<void> {
     const tid = setTimeout(() => ctrl.abort(), 400);
     try {
       const res = await fetch(`http://${ip}:${port}/api/room`, { signal: ctrl.signal });
-      if (res.ok) {
-        const data = await res.json();
-        found.push({ ip, data });
-      }
-    } catch { /* no server at this IP */ } finally {
-      clearTimeout(tid);
-    }
+      if (res.ok) found.push({ ip, data: await res.json() });
+    } catch { /* unreachable */ } finally { clearTimeout(tid); }
   }));
 
-  // If scan was stopped while running, discard results
   if (webScanInterval === null && !el.btnStopDiscovery.disabled) return;
 
   const rooms = found.map(({ ip, data }) => ({
@@ -363,65 +321,30 @@ async function runWebLanScan(port: number): Promise<void> {
     remoteAddress: ip,
     lastSeen: Date.now()
   }));
-
-  renderRooms(el, rooms, (ip, p) => {
-    el.serverIp.value = ip;
-    el.serverPort.value = String(p);
-    connect(ip, p);
-  });
+  renderRooms(el, rooms, (ip, p) => { el.serverIp.value = ip; el.serverPort.value = String(p); connect(ip, p); });
 }
 
-// ========================
-// Draw loop
-// ========================
-
-function draw() {
-  requestAnimationFrame(draw);
-
-  const now = performance.now();
-
-  // Send input from the rAF loop so it's always in sync with the render frame.
-  // Rate-limited to INPUT_SEND_RATE (60 Hz). Using a local tick clock gives the
-  // server a more accurate tick estimate than waiting for the next snapshot.
-  if (ws && ws.readyState === WebSocket.OPEN && startGame) {
-    if (now - lastInputSentTime >= INPUT_INTERVAL_MS) {
-      lastInputSentTime = now;
-      const elapsedTicks = Math.floor((now - lastSnapshotArrivalTime) / TICK_MS);
-      const tickEstimate = lastSnapshotTick + elapsedTicks;
-      send({
-        type: 'Input',
-        payload: {
-          seq: inputSeq++,
-          tick: tickEstimate,
-          moveDir: input.computeMoveDir(),
-          placeBalloon: input.consumePlaceQueued(),
-          useNeedleSlot: input.consumeNeedleSlotQueued()
-        }
-      });
-    }
+function startWebRoomPolling(host: string, port: number): void {
+  async function poll() {
+    if (state.ws && state.ws.readyState === WebSocket.OPEN) return;
+    try {
+      const res = await fetch(`http://${host}:${port}/api/room`);
+      if (!res.ok) return;
+      const data = await res.json();
+      renderRooms(el, [{
+        roomName: data.roomName ?? 'LAN Bomber 방',
+        playerCount: data.playerCount ?? 0,
+        wsPort: data.wsPort ?? port,
+        hostIpHint: data.hostIpHint ?? '',
+        mode: data.mode ?? 'FFA',
+        mapId: data.mapId ?? 'map1',
+        remoteAddress: host,
+        lastSeen: Date.now()
+      }], (ip, p) => { el.serverIp.value = ip; el.serverPort.value = String(p); connect(ip, p); });
+    } catch { /* not reachable yet */ }
   }
-
-  ctx.clearRect(0, 0, el.canvas.width, el.canvas.height);
-
-  if (!startGame) {
-    el.hudTop.textContent = '';
-    el.hudTimer.textContent = '';
-    el.debug.textContent = '';
-    return;
-  }
-
-  drawGameFrame({
-    ctx,
-    el,
-    startGame,
-    snapshotCurr,
-    snapshotPrev,
-    snapshotInterpStart,
-    snapshotInterpDuration,
-    serverTickEstimate,
-    pingMs,
-    myId
-  });
+  poll();
+  setInterval(poll, 2000);
 }
 
 // ========================
@@ -435,10 +358,10 @@ const SKINS: Array<{ id: string; label: string; premium?: boolean }> = [
   { id: 'red',      label: '빨강' },
   { id: 'white',    label: '하양' },
   { id: 'yellow',   label: '노랑' },
-  { id: 'Chiikawa', label: '치이카와', premium: true },
+  { id: 'Chiikawa', label: '치이카와', premium: true }
 ];
 
-function openCharPicker() {
+function openCharPicker(): void {
   const modal = document.getElementById('charPickerModal')!;
   const grid  = document.getElementById('charPickerGrid')!;
   const current = localStorage.getItem('playerSkin') ?? '';
@@ -447,94 +370,71 @@ function openCharPicker() {
   for (const skin of SKINS) {
     const card = document.createElement('div');
     card.className = 'char-card' + (current === skin.id ? ' selected' : '');
-
     const img = document.createElement('img');
     img.src = `assests/images/characters/${skin.id}/idle.svg`;
     img.alt = skin.label;
-
     const nameEl = document.createElement('div');
     nameEl.className = 'char-card-name';
     nameEl.textContent = skin.label;
-
     card.appendChild(img);
     card.appendChild(nameEl);
-
     if (skin.premium) {
       const badge = document.createElement('div');
       badge.className = 'char-card-premium';
       badge.textContent = '⭐ 프리미엄';
       card.appendChild(badge);
     }
-
     card.onclick = () => {
-      if (skin.premium) {
-        alert('호성이한테 1만원을 주면 적용');
-        return;
-      }
+      if (skin.premium) { alert('호성이한테 1만원을 주면 적용'); return; }
       localStorage.setItem('playerSkin', skin.id);
-      // Broadcast skin change to server so other players can see it
       send({ type: 'SetSkin', payload: { skin: skin.id } });
       closeCharPicker();
       refreshRoomStateUI();
     };
-
     grid.appendChild(card);
   }
-
   modal.classList.remove('hidden');
 }
 
-function closeCharPicker() {
+function closeCharPicker(): void {
   document.getElementById('charPickerModal')!.classList.add('hidden');
 }
 
 // ========================
-// UI Binding
+// UI Binding (split by screen)
 // ========================
 
-function sendChat() {
+function sendChat(): void {
   const text = el.chatInput.value.trim();
   if (!text) return;
   send({ type: 'ChatSend', payload: { text } });
   el.chatInput.value = '';
 }
 
-function bindUI() {
-  // Main screen
+function bindMainScreen(): void {
   el.btnJoin.onclick = () => {
     const ip = el.serverIp.value.trim() || window.location.hostname || 'localhost';
     const port = Number(el.serverPort.value || DEFAULT_WS_PORT);
     connect(ip, port);
   };
 
-  el.btnDisconnect.onclick = () => {
-    disconnect();
-  };
+  el.btnDisconnect.onclick = () => disconnect();
 
   el.btnHost.onclick = async () => {
-    // Web mode: server is already running, just connect to it
     if (!lanApi) {
       const port = Number(el.serverPort.value || DEFAULT_WS_PORT);
       const host = window.location.hostname || 'localhost';
-      currentRoomName = el.roomName.value.trim() || 'LAN Bomber 방';
-      pendingHostRoomName = currentRoomName; // will be sent in JoinRoom to update server name
+      state.currentRoomName = el.roomName.value.trim() || 'LAN Bomber 방';
+      state.pendingHostRoomName = state.currentRoomName;
       connect(host, port);
       return;
     }
-
-    // Electron mode: always create a new server (no toggle)
     const port = Number(el.serverPort.value || DEFAULT_WS_PORT);
     const roomName = el.roomName.value.trim() || 'LAN Bomber 방';
-    if (hostedPorts.has(port)) {
-      logLine('info', `포트 ${port}는 이미 실행 중입니다.`);
-      return;
-    }
-    currentRoomName = roomName;
+    if (hostedPorts.has(port)) { logLine('info', `포트 ${port}는 이미 실행 중입니다.`); return; }
+    state.currentRoomName = roomName;
     const res = await lanApi.startServer({ port, roomName, udpPort: DEFAULT_UDP_ANNOUNCE_PORT, logLevel: 'info' });
-    if (!res.ok) {
-      logLine('info', `Host failed: ${res.error}`);
-      return;
-    }
+    if (!res.ok) { logLine('info', `Host failed: ${res.error}`); return; }
     hostedPorts.set(port, roomName);
     logLine('info', `방 "${roomName}" (포트 ${port}) 시작됨.`);
     renderHostedRooms();
@@ -544,7 +444,6 @@ function bindUI() {
 
   el.btnDiscovery.onclick = async () => {
     if (lanApi) {
-      // Electron mode: UDP broadcast discovery
       const res = await lanApi.startDiscovery(DEFAULT_UDP_ANNOUNCE_PORT);
       if (!res.ok) return;
       el.btnDiscovery.disabled = true;
@@ -552,7 +451,6 @@ function bindUI() {
       logLine('info', 'LAN discovery started.');
       return;
     }
-    // Web mode: subnet scan
     const port = Number(el.serverPort.value || DEFAULT_WS_PORT);
     el.btnDiscovery.disabled = true;
     el.btnStopDiscovery.disabled = false;
@@ -569,17 +467,14 @@ function bindUI() {
       logLine('info', 'LAN discovery stopped.');
       return;
     }
-    // Web mode: stop subnet scan
-    if (webScanInterval !== null) {
-      clearInterval(webScanInterval);
-      webScanInterval = null;
-    }
+    if (webScanInterval !== null) { clearInterval(webScanInterval); webScanInterval = null; }
     el.btnDiscovery.disabled = false;
     el.btnStopDiscovery.disabled = true;
     logLine('info', 'LAN 탐색 중지.');
   };
+}
 
-  // Room screen
+function bindRoomScreen(): void {
   el.btnCharPicker.onclick = openCharPicker;
   document.getElementById('btnCloseCharPicker')!.onclick = closeCharPicker;
   document.getElementById('charPickerModal')!.addEventListener('click', (e) => {
@@ -588,9 +483,9 @@ function bindUI() {
 
   el.btnLeaveRoom.onclick = () => {
     disconnect();
-    startGame = null;
-    snapshotPrev = null;
-    snapshotCurr = null;
+    state.startGame = null;
+    state.snap.prev = null;
+    state.snap.curr = null;
     setScreen(el, 'main');
   };
 
@@ -598,9 +493,14 @@ function bindUI() {
     send({ type: 'Ready', payload: { isReady: el.readyToggle.checked } });
   };
 
+  el.btnSwitchTeam.onclick = () => {
+    const myPlayer = state.myId ? state.roomState?.players.find(p => p.id === state.myId) : null;
+    if (!myPlayer) return;
+    send({ type: 'SetTeam', payload: { team: myPlayer.team === 0 ? 1 : 0 } });
+  };
+
   el.modeSelect.onchange = () => {
-    const mode = el.modeSelect.value as GameMode;
-    send({ type: 'SetMode', payload: { mode } });
+    send({ type: 'SetMode', payload: { mode: el.modeSelect.value as GameMode } });
   };
 
   el.mapSelect.onchange = () => {
@@ -608,8 +508,7 @@ function bindUI() {
   };
 
   el.timerSelect.onchange = () => {
-    const seconds = Number(el.timerSelect.value);
-    send({ type: 'SetGameDuration', payload: { seconds } });
+    send({ type: 'SetGameDuration', payload: { seconds: Number(el.timerSelect.value) } });
   };
 
   el.btnStart.onclick = () => {
@@ -618,29 +517,27 @@ function bindUI() {
 
   el.btnChatSend.onclick = sendChat;
   el.chatInput.onkeydown = (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      sendChat();
-    }
+    if (e.key === 'Enter') { e.preventDefault(); sendChat(); }
   };
+}
 
-  // Game screen
+function bindGameScreen(): void {
   el.btnLeave.onclick = () => {
     disconnect();
-    startGame = null;
-    snapshotPrev = null;
-    snapshotCurr = null;
+    state.startGame = null;
+    state.snap.prev = null;
+    state.snap.curr = null;
     el.countdown.textContent = '';
     setScreen(el, 'main');
   };
+}
 
-  // Result screen
+function bindResultScreen(): void {
   el.btnReturnLobby.onclick = () => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      // Still connected: go back to room screen
-      startGame = null;
-      snapshotPrev = null;
-      snapshotCurr = null;
+    if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+      state.startGame = null;
+      state.snap.prev = null;
+      state.snap.curr = null;
       setScreen(el, 'room');
       refreshRoomStateUI();
     } else {
@@ -649,11 +546,87 @@ function bindUI() {
   };
 }
 
+function bindUI(): void {
+  bindMainScreen();
+  bindRoomScreen();
+  bindGameScreen();
+  bindResultScreen();
+}
+
+// ========================
+// Ping loop
+// ========================
+
+function startPingLoop(): void {
+  setInterval(() => {
+    if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+    send({ type: 'Ping', payload: { clientTime: performance.now() } });
+  }, 500);
+}
+
+// ========================
+// Draw loop
+// ========================
+
+function draw(): void {
+  requestAnimationFrame(draw);
+
+  const now = performance.now();
+
+  if (state.ws && state.ws.readyState === WebSocket.OPEN && state.startGame) {
+    if (now - state.lastSentTime >= INPUT_INTERVAL_MS) {
+      state.lastSentTime = now;
+      const elapsedTicks = Math.floor((now - state.lastSnapArrival) / TICK_MS);
+      const tickEstimate = state.lastSnapTick + elapsedTicks;
+      send({
+        type: 'Input',
+        payload: {
+          seq: state.inputSeq++,
+          tick: tickEstimate,
+          moveDir: input.computeMoveDir(),
+          placeBalloon: input.consumePlaceQueued(),
+          useNeedleSlot: input.consumeNeedleSlotQueued()
+        }
+      });
+    }
+  }
+
+  ctx.clearRect(0, 0, el.canvas.width, el.canvas.height);
+
+  if (!state.startGame) {
+    el.hudTop.textContent = '';
+    el.hudTimer.textContent = '';
+    el.debug.textContent = '';
+    return;
+  }
+
+  const playerTeams = state.startGame.mode === 'TEAM' ? buildPlayerTeams(state) : undefined;
+
+  // Prune expired notifications
+  state.notifications = state.notifications.filter(n => now - n.createdAt < n.ttl);
+
+  drawGameFrame({
+    ctx,
+    el,
+    startGame: state.startGame,
+    snapshotCurr: state.snap.curr,
+    snapshotPrev: state.snap.prev,
+    snapshotInterpStart: state.snap.interpStart,
+    snapshotInterpDuration: state.snap.interpDuration,
+    serverTickEstimate: state.serverTick,
+    pingMs: state.pingMs,
+    myId: state.myId,
+    playerTeams,
+    notifications: state.notifications,
+    now
+  });
+}
+
 // ========================
 // Init
 // ========================
 
-async function init() {
+async function init(): Promise<void> {
   preloadAssets();
   setScreen(el, 'main');
   bindUI();
@@ -681,9 +654,7 @@ async function init() {
     el.serverPort.value = port;
     el.hostIpHint.textContent = `서버 주소: ${host}:${port}`;
     el.btnHost.textContent = '방 만들기';
-    el.btnStopDiscovery.disabled = true; // enabled only while scanning
-
-    // Web mode: poll current server's /api/room (for when accessing host's IP directly)
+    el.btnStopDiscovery.disabled = true;
     startWebRoomPolling(host, Number(port));
   }
 

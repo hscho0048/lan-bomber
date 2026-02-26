@@ -9,14 +9,11 @@ import { WebSocketServer, WebSocket } from 'ws';
 import {
   BALLOON_FUSE_TICKS,
   DEFAULT_STATS,
-  EXPLOSION_DURATION_TICKS,
-  ITEM_DROP_CHANCE,
   MAX_PLAYERS,
   RESCUE_INVULN_TICKS,
   SNAPSHOT_INTERVAL_TICKS,
   SOFTBLOCK_FILL_PROB,
   TICK_RATE,
-  TRAP_DURATION_TICKS,
   createLogger,
   getMapPreset,
   type GameMode,
@@ -44,6 +41,13 @@ import {
   simulateMovement as simulateMovementSystem
 } from './systems/movement';
 import { applyItem as applyItemSystem, findItemAt as findItemAtSystem, rollItemType as rollItemTypeSystem } from './systems/items';
+import {
+  computeExplosionTiles as computeExplosionTilesSystem,
+  explodeBalloon as explodeBalloonSystem,
+  processBalloonExplosions as processBalloonExplosionsSystem,
+  type BalloonContext
+} from './systems/balloons';
+import { checkRescues, checkTrapDeaths, checkTrapExpiry, type RescueContext } from './systems/rescue';
 
 type LogLevel = 'info' | 'debug';
 
@@ -835,58 +839,18 @@ export class LanBomberServer {
       }
     }
 
-    // 3) Rescue (TEAM mode)
-    if (this.mode === 'TEAM') {
-      for (const trapped of this.players.values()) {
-        if (trapped.state !== 'Trapped') continue;
-        const tpos = this.getPlayerOccupyTile(trapped);
-        for (const rescuer of this.players.values()) {
-          if (rescuer.state !== 'Alive') continue;
-          if (rescuer.team !== trapped.team) continue;
-          const rpos = this.getPlayerOccupyTile(rescuer);
-          if (rpos.x === tpos.x && rpos.y === tpos.y) {
-            trapped.state = 'Alive';
-            trapped.invulnUntilTick = this.tick + RESCUE_INVULN_TICKS;
-            trapped.trappedUntilTick = -1;
-            this.sendEvent('PlayerRescued', { playerId: trapped.id, byPlayerId: rescuer.id });
-            break;
-          }
-        }
-      }
-    }
-
-    // 3.5) Kill trapped players instantly on enemy contact
-    for (const trapped of this.players.values()) {
-      if (trapped.state !== 'Trapped') continue;
-      const tpos = this.getPlayerOccupyTile(trapped);
-      for (const other of this.players.values()) {
-        if (other.id === trapped.id) continue;
-        if (other.state !== 'Alive') continue;
-        if (this.mode === 'TEAM' && other.team === trapped.team) continue;
-        const opos = this.getPlayerOccupyTile(other);
-        if (opos.x === tpos.x && opos.y === tpos.y) {
-          trapped.state = 'Dead';
-          if (!this.deathOrder.includes(trapped.id)) {
-            this.deathOrder.push(trapped.id);
-          }
-          this.sendEvent('PlayerDied', { playerId: trapped.id });
-          break;
-        }
-      }
-    }
-
-    // 4) Trapped -> Dead
-    for (const p of this.players.values()) {
-      if (p.state !== 'Trapped') continue;
-      if (p.trappedUntilTick >= 0 && this.tick >= p.trappedUntilTick) {
-        p.state = 'Dead';
-        // Track death order
-        if (!this.deathOrder.includes(p.id)) {
-          this.deathOrder.push(p.id);
-        }
-        this.sendEvent('PlayerDied', { playerId: p.id });
-      }
-    }
+    // 3) Rescue / trap-death / trap-expiry
+    const rescueCtx: RescueContext = {
+      tick: this.tick,
+      mode: this.mode,
+      players: this.players as any,
+      deathOrder: this.deathOrder,
+      getPlayerOccupyTile: (p) => this.getPlayerOccupyTile(p as any),
+      sendEvent: (type, payload) => this.sendEvent(type, payload)
+    };
+    checkRescues(rescueCtx);
+    checkTrapDeaths(rescueCtx);
+    checkTrapExpiry(rescueCtx);
 
     // 5) Explosions expire
     for (const [id, ex] of this.explosions.entries()) {
@@ -966,143 +930,33 @@ export class LanBomberServer {
     return n;
   }
 
-  private processBalloonExplosions(): void {
-    // Collect due balloons
-    const pending: string[] = [];
-    const scheduled = new Set<string>();
-    for (const b of this.balloons.values()) {
-      if (b.explodeTick <= this.tick) {
-        pending.push(b.id);
-        scheduled.add(b.id);
-      }
-    }
-
-    // Deterministic queue: sort by (y,x,id)
-    const sortPending = () => {
-      pending.sort((a, b) => {
-        const ba = this.balloons.get(a);
-        const bb = this.balloons.get(b);
-        if (!ba && !bb) return a.localeCompare(b);
-        if (!ba) return 1;
-        if (!bb) return -1;
-        if (ba.y !== bb.y) return ba.y - bb.y;
-        if (ba.x !== bb.x) return ba.x - bb.x;
-        return ba.id.localeCompare(bb.id);
-      });
+  private makeBalloonContext(): BalloonContext {
+    return {
+      tick: this.tick,
+      width: this.width,
+      height: this.height,
+      grid: this.grid as any,
+      balloons: this.balloons as any,
+      balloonsByPos: this.balloonsByPos,
+      explosions: this.explosions as any,
+      items: this.items as any,
+      players: this.players as any,
+      nextExplosionId: () => `e${++this.explosionCounter}`,
+      nextItemId: () => `i${++this.itemCounter}`,
+      sendEvent: (type, payload) => this.sendEvent(type, payload),
+      getPlayerOccupyTile: (p) => this.getPlayerOccupyTile(p as any),
+      findItemAt: (x, y) => this.findItemAt(x, y),
+      rollItemType: () => this.rollItemType(),
+      random: () => this.rng.next()
     };
-
-    while (pending.length > 0) {
-      sortPending();
-      const id = pending.shift()!;
-      const balloon = this.balloons.get(id);
-      if (!balloon) continue; // already exploded via chain
-
-      // Explode
-      this.explodeBalloon(balloon, pending, scheduled);
-    }
   }
 
-  private explodeBalloon(balloon: Balloon, pending: string[], scheduled: Set<string>): void {
-    const { x: ox, y: oy } = balloon;
-
-    // Remove balloon first
-    this.balloons.delete(balloon.id);
-    this.balloonsByPos.delete(keyXY(ox, oy));
-
-    const tiles = this.computeExplosionTiles(ox, oy, balloon.power);
-    const exId = `e${++this.explosionCounter}`;
-    const explosion: Explosion = {
-      id: exId,
-      originX: ox,
-      originY: oy,
-      tiles,
-      endTick: this.tick + EXPLOSION_DURATION_TICKS
-    };
-    this.explosions.set(exId, explosion);
-
-    this.sendEvent('BalloonExploded', { balloonId: balloon.id, x: ox, y: oy, tiles });
-
-    // Apply effects
-    for (const t of tiles) {
-      // Items can be destroyed by explosions
-      const itemId = this.findItemAt(t.x, t.y);
-      if (itemId) {
-        this.items.delete(itemId);
-      }
-
-      // Trap players
-      for (const p of this.players.values()) {
-        if (p.state !== 'Alive') continue;
-        if (this.tick < p.invulnUntilTick) continue;
-        const occ = this.getPlayerOccupyTile(p);
-        if (occ.x === t.x && occ.y === t.y) {
-          p.state = 'Trapped';
-          p.trappedUntilTick = this.tick + TRAP_DURATION_TICKS;
-          p.inputDir = 'None';
-          p.placeBalloonQueued = 0;
-          // Stop movement at current tile
-          const occ2 = this.getPlayerOccupyTile(p);
-          p.move = { moving: false, fromX: occ2.x, fromY: occ2.y, toX: occ2.x, toY: occ2.y, dir: 'None', t: 0 };
-          this.sendEvent('PlayerTrapped', { playerId: p.id, x: t.x, y: t.y });
-        }
-      }
-
-      // Chain reaction
-      const bid = this.balloonsByPos.get(keyXY(t.x, t.y));
-      if (bid) {
-        const b2 = this.balloons.get(bid);
-        if (b2 && !scheduled.has(b2.id)) {
-          b2.explodeTick = this.tick;
-          pending.push(b2.id);
-          scheduled.add(b2.id);
-        }
-      }
-    }
-
-    // Destroy soft blocks
-    for (const t of tiles) {
-      if (this.grid[t.y][t.x] === 'SoftBlock') {
-        this.grid[t.y][t.x] = 'Empty';
-        this.sendEvent('BlockDestroyed', { x: t.x, y: t.y });
-
-        if (this.rng.next() < ITEM_DROP_CHANCE) {
-          const itemType = this.rollItemType();
-          const itemId = `i${++this.itemCounter}`;
-          const item: Item = { id: itemId, x: t.x, y: t.y, itemType };
-          this.items.set(itemId, item);
-          this.sendEvent('ItemSpawned', { id: itemId, x: t.x, y: t.y, itemType });
-        }
-      }
-    }
+  private processBalloonExplosions(): void {
+    processBalloonExplosionsSystem(this.makeBalloonContext());
   }
 
   private computeExplosionTiles(ox: number, oy: number, power: number): XY[] {
-    const tiles: XY[] = [{ x: ox, y: oy }];
-
-    const dirs: Array<{ dx: number; dy: number }> = [
-      { dx: 0, dy: -1 },
-      { dx: 0, dy: 1 },
-      { dx: -1, dy: 0 },
-      { dx: 1, dy: 0 }
-    ];
-
-    for (const { dx, dy } of dirs) {
-      for (let i = 1; i <= power; i++) {
-        const x = ox + dx * i;
-        const y = oy + dy * i;
-        if (x < 0 || y < 0 || x >= this.width || y >= this.height) break;
-        const tile = this.grid[y][x];
-        if (tile === 'SolidWall') {
-          break; // stop, do not include
-        }
-        tiles.push({ x, y });
-        if (tile === 'SoftBlock') {
-          break; // include soft block, stop
-        }
-      }
-    }
-
-    return tiles;
+    return computeExplosionTilesSystem(this.grid as any, this.width, this.height, ox, oy, power);
   }
 
   private rollItemType(): ItemType {
@@ -1137,26 +991,25 @@ export class LanBomberServer {
     this.sendEvent('PlayerRescued', { playerId: p.id, byPlayerId: p.id });
   }
 
-  private buildRanking(): Array<{ id: string; name: string; colorIndex: number }> {
+  private buildRanking(): Array<{ id: string; name: string; colorIndex: number; team: number }> {
     // Survivors rank above dead; dead ranked in reverse death order (last to die = higher rank)
-    const survivors: Array<{ id: string; name: string; colorIndex: number }> = [];
+    const survivors: Array<{ id: string; name: string; colorIndex: number; team: number }> = [];
     for (const p of this.players.values()) {
       if (p.state !== 'Dead') {
-        survivors.push({ id: p.id, name: p.name, colorIndex: p.colorIndex });
+        survivors.push({ id: p.id, name: p.name, colorIndex: p.colorIndex, team: p.team });
       }
     }
 
     // deathOrder[0] = first to die = last place
     // Reverse it so last-to-die comes first
-    const deadByRank: Array<{ id: string; name: string; colorIndex: number }> = [];
+    const deadByRank: Array<{ id: string; name: string; colorIndex: number; team: number }> = [];
     for (let i = this.deathOrder.length - 1; i >= 0; i--) {
       const pid = this.deathOrder[i];
       const p = this.players.get(pid);
       if (p) {
-        deadByRank.push({ id: p.id, name: p.name, colorIndex: p.colorIndex });
+        deadByRank.push({ id: p.id, name: p.name, colorIndex: p.colorIndex, team: p.team });
       } else {
-        // Player may have disconnected; still add to ranking with stored name
-        deadByRank.push({ id: pid, name: '(disconnected)', colorIndex: 0 });
+        deadByRank.push({ id: pid, name: '(disconnected)', colorIndex: 0, team: 0 });
       }
     }
 
@@ -1230,7 +1083,8 @@ export class LanBomberServer {
         team: p.team,
         stats: p.stats,
         invulnerable: this.tick < p.invulnUntilTick,
-        skin: p.skin
+        skin: p.skin,
+        trappedUntilTick: p.state === 'Trapped' ? p.trappedUntilTick : undefined
       };
     });
 

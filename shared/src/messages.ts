@@ -108,6 +108,7 @@ export interface PlayerSnapshot {
   stats: PlayerStats;
   invulnerable: boolean;
   skin: string; // character skin folder name, '' = use default color
+  trappedUntilTick?: number; // tick when trap expires (undefined if not trapped)
 }
 
 export interface BalloonSnapshot {

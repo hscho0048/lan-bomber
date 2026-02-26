@@ -49,6 +49,8 @@ export type RendererElements = {
   chatMessages: HTMLDivElement;
   chatInput: HTMLInputElement;
   btnChatSend: HTMLButtonElement;
+  btnSwitchTeam: HTMLButtonElement;
+  teamCountDisplay: HTMLDivElement;
 
   // Game screen
   canvas: HTMLCanvasElement;
@@ -57,6 +59,7 @@ export type RendererElements = {
   countdown: HTMLDivElement;
   debug: HTMLDivElement;
   hudNeedle: HTMLDivElement;
+  playerStatusPanel: HTMLDivElement;
   btnLeave: HTMLButtonElement;
 
   // Result screen

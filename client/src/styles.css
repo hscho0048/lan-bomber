@@ -357,11 +357,16 @@ h1, h2, h3 { margin: 0; font-weight: 700; }
 .slot-badge.host-badge { background: #78350f; color: #fbbf24; border: 1px solid #b45309; }
 .slot-badge.ready-badge { background: #14532d; color: #4ade80; border: 1px solid #16a34a; }
 .slot-badge.notready-badge { background: #450a0a; color: #f87171; border: 1px solid #991b1b; }
+.slot-badge.team-a-badge { background: #1e3a5f; color: #60a5fa; border: 1px solid #2563eb; }
+.slot-badge.team-b-badge { background: #4a1a1a; color: #f87171; border: 1px solid #dc2626; }
 
 .ready-section {
   margin-top: auto;
   padding-top: 12px;
   border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 .ready-label {
   display: flex;
@@ -379,6 +384,14 @@ h1, h2, h3 { margin: 0; font-weight: 700; }
 .ready-label:hover { background: var(--bg-hover); }
 .ready-checkbox { width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent-green); }
 .ready-text { flex: 1; }
+.ready-actions { display: flex; gap: 8px; }
+.team-count {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  text-align: center;
+  padding: 6px 0;
+}
 
 /* Chat - Right Panel */
 .room-right {
@@ -684,10 +697,34 @@ h1, h2, h3 { margin: 0; font-weight: 700; }
 .result-label.last   { background: #2d0a0a; color: #f87171; max-width: 260px; white-space: normal; text-align: center; line-height: 1.4; }
 .result-label.loser  { background: #1e1e2e; color: var(--text-hint); }
 
+/* Team result styles */
+.result-team-header {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 6px 0;
+  text-align: center;
+}
+.team-a-header { color: #60a5fa; }
+.team-b-header { color: #f87171; }
+
+.result-entry-team {
+  padding: 10px 16px;
+  gap: 12px;
+}
+.result-entry-team .result-char-img {
+  width: 36px;
+  height: 36px;
+}
+
+.team-a-name { color: #60a5fa; }
+.team-b-name { color: #f87171; }
+
 /* ========================
    CHARACTER PICKER
 ======================== */
-.char-picker-btn { margin-top: 10px; width: 100%; }
+.char-picker-btn { flex: 1; }
 
 .modal-overlay {
   position: fixed;
@@ -785,3 +822,30 @@ h1, h2, h3 { margin: 0; font-weight: 700; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ========================
+   PLAYER STATUS PANEL
+======================== */
+.player-status-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 110px;
+  margin-top: 4px;
+}
+.psp-team-header {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .5px;
+  margin-top: 4px;
+  text-transform: uppercase;
+}
+.psp-entry {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+}
+.psp-icon-alive   { /* colour set inline per player */ }
+.psp-icon-trapped { color: #fb923c; }
+.psp-icon-dead    { color: #4b5563; }

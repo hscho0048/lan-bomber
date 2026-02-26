@@ -57,6 +57,8 @@ export function getRendererElements(): RendererElements {
     chatMessages: mustGet<HTMLDivElement>('chatMessages'),
     chatInput: mustGet<HTMLInputElement>('chatInput'),
     btnChatSend: mustGet<HTMLButtonElement>('btnChatSend'),
+    btnSwitchTeam: mustGet<HTMLButtonElement>('btnSwitchTeam'),
+    teamCountDisplay: mustGet<HTMLDivElement>('teamCountDisplay'),
 
     // Game screen
     canvas: mustGet<HTMLCanvasElement>('gameCanvas'),
@@ -65,6 +67,7 @@ export function getRendererElements(): RendererElements {
     countdown: mustGet<HTMLDivElement>('countdown'),
     debug: mustGet<HTMLDivElement>('debug'),
     hudNeedle: mustGet<HTMLDivElement>('hudNeedle'),
+    playerStatusPanel: mustGet<HTMLDivElement>('playerStatusPanel'),
     btnLeave: mustGet<HTMLButtonElement>('btnLeave'),
 
     // Result screen

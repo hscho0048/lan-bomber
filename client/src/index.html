@@ -124,7 +124,11 @@
               <input id="readyToggle" type="checkbox" class="ready-checkbox" />
               <span class="ready-text">준비 완료</span>
             </label>
-            <button id="btnCharPicker" class="btn btn-secondary btn-sm char-picker-btn">🎭 캐릭터 변경</button>
+            <div class="ready-actions">
+              <button id="btnCharPicker" class="btn btn-secondary btn-sm char-picker-btn">🎭 캐릭터 변경</button>
+              <button id="btnSwitchTeam" class="btn btn-secondary btn-sm hidden">팀 변경</button>
+            </div>
+            <div id="teamCountDisplay" class="team-count hidden"></div>
           </div>
         </div>
 
@@ -184,6 +188,7 @@
       <div class="game-topbar">
         <div class="game-hud-left">
           <div id="hudTop" class="hud-mode"></div>
+          <div id="playerStatusPanel" class="player-status-panel"></div>
         </div>
         <div class="game-hud-center">
           <div id="hudTimer" class="hud-timer"></div>
