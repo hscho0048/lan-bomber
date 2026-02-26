@@ -40,6 +40,7 @@ export type RendererElements = {
   slotNames: HTMLDivElement[];      // slotName0 - slotName5
   slotBadges: HTMLDivElement[];     // slotBadge0 - slotBadge5
   readyToggle: HTMLInputElement;
+  btnCharPicker: HTMLButtonElement;
   hostControls: HTMLDivElement;
   timerSelect: HTMLSelectElement;
   modeSelect: HTMLSelectElement;
@@ -59,6 +60,7 @@ export type RendererElements = {
   btnLeave: HTMLButtonElement;
 
   // Result screen
+  resultTitle: HTMLHeadingElement;
   resultList: HTMLDivElement;
   btnReturnLobby: HTMLButtonElement;
 };

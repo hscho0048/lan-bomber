@@ -6,22 +6,26 @@ This project depends on the following third-party packages:
    - License: MIT
    - https://github.com/websockets/ws
 
-2) Electron
+2) express (Fast, unopinionated web framework for Node.js)
+   - License: MIT
+   - https://github.com/expressjs/express
+
+3) Electron
    - License: MIT
    - https://github.com/electron/electron
 
-3) esbuild
+4) esbuild
    - License: MIT
    - https://github.com/evanw/esbuild
 
-4) tsx
+5) tsx
    - License: MIT
    - https://github.com/privatenumber/tsx
 
-5) TypeScript
+6) TypeScript
    - License: Apache-2.0
    - https://github.com/microsoft/TypeScript
 
-6) @types/node
+7) @types/node
    - License: MIT
    - https://github.com/DefinitelyTyped/DefinitelyTyped

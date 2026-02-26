@@ -130,6 +130,10 @@ export function parseClientMessage(raw: string): ClientToServerMessage | null {
       if (!isNumber(payload.clientTime)) return null;
       return { type: 'Ping', payload: { clientTime: payload.clientTime } };
     }
+    case 'SetSkin': {
+      const skin = isString(payload.skin) ? payload.skin.trim().slice(0, 32) : '';
+      return { type: 'SetSkin', payload: { skin } };
+    }
     default:
       return null;
   }
@@ -173,7 +177,8 @@ export function parseServerMessage(raw: string): ServerToClientMessage | null {
             id: (p as any).id,
             name: (p as any).name,
             team: (p as any).team,
-            colorIndex: isInt((p as any).colorIndex) ? (p as any).colorIndex : 0
+            colorIndex: isInt((p as any).colorIndex) ? (p as any).colorIndex : 0,
+            skin: isString((p as any).skin) ? (p as any).skin : ''
           })),
           readyStates: payload.readyStates as Record<string, boolean>,
           hostId: payload.hostId,

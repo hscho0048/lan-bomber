@@ -680,7 +680,64 @@ h1, h2, h3 { margin: 0; font-weight: 700; }
   font-weight: 600;
 }
 .result-label.winner { background: #78350f; color: #fbbf24; }
-.result-label.loser { background: #1e1e2e; color: var(--text-hint); }
+.result-label.draw   { background: #1e3a5f; color: #93c5fd; }
+.result-label.last   { background: #2d0a0a; color: #f87171; max-width: 260px; white-space: normal; text-align: center; line-height: 1.4; }
+.result-label.loser  { background: #1e1e2e; color: var(--text-hint); }
+
+/* ========================
+   CHARACTER PICKER
+======================== */
+.char-picker-btn { margin-top: 10px; width: 100%; }
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.modal-overlay.hidden { display: none; }
+
+.modal-box {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 28px 32px;
+  text-align: center;
+  min-width: 360px;
+  max-width: 90vw;
+}
+.modal-title {
+  font-size: 20px;
+  font-weight: 800;
+  margin-bottom: 20px;
+}
+
+.char-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.char-card {
+  background: var(--bg-panel);
+  border: 2px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 6px 8px;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.1s;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.char-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+.char-card.selected { border-color: #fbbf24; background: #1a1500; }
+.char-card img { width: 52px; height: 52px; object-fit: contain; }
+.char-card-name { font-size: 11px; font-weight: 600; color: var(--text-hint); }
+.char-card-premium { font-size: 10px; color: #fbbf24; font-weight: 700; }
 
 /* ========================
    SCROLLBAR STYLING

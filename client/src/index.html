@@ -124,6 +124,7 @@
               <input id="readyToggle" type="checkbox" class="ready-checkbox" />
               <span class="ready-text">준비 완료</span>
             </label>
+            <button id="btnCharPicker" class="btn btn-secondary btn-sm char-picker-btn">🎭 캐릭터 변경</button>
           </div>
         </div>
 
@@ -166,8 +167,11 @@
           <div class="control-group">
             <label class="control-label">맵</label>
             <select id="mapSelect" class="control-select">
-              <option value="map1">map1</option>
-              <option value="map2">map2</option>
+              <option value="map1">Classic Grid (15×13)</option>
+              <option value="map2">Cross Maze (15×13)</option>
+              <option value="map3">Grand Classic (21×15)</option>
+              <option value="map4">Canyon (19×15)</option>
+              <option value="map5">Titan Fields (23×17)</option>
             </select>
           </div>
           <button id="btnStart" class="btn btn-start" disabled>게임 시작</button>
@@ -204,9 +208,18 @@
     <!-- ===== RESULT SCREEN ===== -->
     <div id="resultScreen" class="hidden">
       <div class="result-container">
-        <h1 class="result-title">게임 결과</h1>
+        <h1 id="resultTitle" class="result-title">게임 결과</h1>
         <div id="resultList" class="result-list"></div>
         <button id="btnReturnLobby" class="btn btn-primary btn-wide">로비로 돌아가기</button>
+      </div>
+    </div>
+
+    <!-- ===== CHARACTER PICKER MODAL ===== -->
+    <div id="charPickerModal" class="modal-overlay hidden">
+      <div class="modal-box">
+        <h2 class="modal-title">🎭 캐릭터 선택</h2>
+        <div id="charPickerGrid" class="char-picker-grid"></div>
+        <button id="btnCloseCharPicker" class="btn btn-secondary" style="margin-top:16px;">닫기</button>
       </div>
     </div>
 

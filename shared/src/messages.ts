@@ -51,6 +51,7 @@ export type SetGameDurationPayload = { seconds: number };
 export type StartRequestPayload = {};
 export type PingPayload = { clientTime: number };
 export type ChatSendPayload = { text: string };
+export type SetSkinPayload = { skin: string };
 
 export type ClientToServerMessage =
   | NetMessage<'JoinRoom', JoinRoomPayload>
@@ -62,7 +63,8 @@ export type ClientToServerMessage =
   | NetMessage<'SetGameDuration', SetGameDurationPayload>
   | NetMessage<'StartRequest', StartRequestPayload>
   | NetMessage<'ChatSend', ChatSendPayload>
-  | NetMessage<'Ping', PingPayload>;
+  | NetMessage<'Ping', PingPayload>
+  | NetMessage<'SetSkin', SetSkinPayload>;
 
 // -------------------------
 // Server -> Client
@@ -73,6 +75,7 @@ export interface RoomPlayerInfo {
   name: string;
   team: number;
   colorIndex: number; // 0-5, maps to CHAR_COLORS
+  skin: string;       // character skin folder name, '' = use default color
 }
 
 export interface RoomStatePayload {
@@ -104,6 +107,7 @@ export interface PlayerSnapshot {
   team: number;
   stats: PlayerStats;
   invulnerable: boolean;
+  skin: string; // character skin folder name, '' = use default color
 }
 
 export interface BalloonSnapshot {

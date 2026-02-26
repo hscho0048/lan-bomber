@@ -35,7 +35,7 @@ export function renderRoomState(
       const ready = !!state.readyStates[player.id];
       const isMe = player.id === myId;
       const isHostPlayer = player.id === state.hostId;
-      renderSlotOccupied(el, i, player.name, player.colorIndex, isMe, isHostPlayer, ready);
+      renderSlotOccupied(el, i, player.name, player.colorIndex, player.skin ?? '', isMe, isHostPlayer, ready);
     } else {
       renderSlotEmpty(el, i);
     }
@@ -78,6 +78,7 @@ function renderSlotOccupied(
   index: number,
   name: string,
   colorIndex: number,
+  skin: string,
   isMe: boolean,
   isHost: boolean,
   isReady: boolean
@@ -86,8 +87,9 @@ function renderSlotOccupied(
   const slot = el.playerSlots[index];
   slot.className = `player-slot occupied color-${color}${isMe ? ' is-me' : ''}`;
 
-  // Character image
-  el.slotImgs[index].innerHTML = `<img src="assests/images/characters/${color}/idle.svg" alt="${color}" />`;
+  // Use server-provided skin (shared with all players)
+  const charFolder = skin || color;
+  el.slotImgs[index].innerHTML = `<img src="assests/images/characters/${charFolder}/idle.svg" alt="${charFolder}" />`;
 
   // Player name
   el.slotNames[index].textContent = isMe ? `${name} (나)` : name;
@@ -175,18 +177,37 @@ export function addSystemMessage(el: RendererElements, text: string) {
   el.chatMessages.scrollTop = el.chatMessages.scrollHeight;
 }
 
+const LAST_PLACE_TAUNTS = [
+  'MVP (Most Vulnerable Player) 🥲',
+  '누가 먼저 죽는지 대회였다면 1등 🏆',
+  '다음 생엔 잘 할 수 있을 거야… 아마도',
+  '오늘 하루도 수고했어요 (꼴찌)',
+  '폭탄에도 개성이 있다고 했잖아요',
+  '열심히 달렸는데 결과가… 😅',
+  '연습이 필요해 보여요 (매우)',
+  '꽃은 지고 나서 빛난다지만 너무 빨리 졌어',
+  '이번 게임의 진정한 조연 🌟',
+  '꼴찌도 완주한 거야, 아마',
+];
+
 export function renderResultScreen(
   el: RendererElements,
   ranking: Array<{ id: string; name: string; colorIndex: number }>,
-  myId: string | null
+  myId: string | null,
+  isDraw: boolean = false
 ) {
+  el.resultTitle.textContent = isDraw ? '🤝 무승부!' : '게임 결과';
   el.resultList.innerHTML = '';
+
+  const isMultiPlayer = ranking.length > 1;
+  const taunt = LAST_PLACE_TAUNTS[Math.floor(Math.random() * LAST_PLACE_TAUNTS.length)];
 
   for (let i = 0; i < ranking.length; i++) {
     const entry = ranking[i];
     const color = CHAR_COLORS[entry.colorIndex] ?? 'blue';
     const rank = i + 1;
     const isMe = entry.id === myId;
+    const isLast = isMultiPlayer && i === ranking.length - 1;
 
     const div = document.createElement('div');
     div.className = `result-entry rank-${Math.min(rank, 4)}`;
@@ -205,9 +226,15 @@ export function renderResultScreen(
     nameEl.style.color = `var(--color-${color})`;
 
     const labelEl = document.createElement('div');
-    if (rank === 1) {
+    if (isLast) {
+      labelEl.className = 'result-label last';
+      labelEl.textContent = `💀 꼴찌 — ${taunt}`;
+    } else if (rank === 1 && !isDraw) {
       labelEl.className = 'result-label winner';
       labelEl.textContent = '🏆 우승';
+    } else if (rank === 1 && isDraw) {
+      labelEl.className = 'result-label draw';
+      labelEl.textContent = '🤝 무승부';
     } else {
       labelEl.className = 'result-label loser';
       labelEl.textContent = `${rank}등`;

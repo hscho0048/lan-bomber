@@ -48,6 +48,7 @@ export function getRendererElements(): RendererElements {
     slotNames,
     slotBadges,
     readyToggle: mustGet<HTMLInputElement>('readyToggle'),
+    btnCharPicker: mustGet<HTMLButtonElement>('btnCharPicker'),
     hostControls: mustGet<HTMLDivElement>('hostControls'),
     timerSelect: mustGet<HTMLSelectElement>('timerSelect'),
     modeSelect: mustGet<HTMLSelectElement>('modeSelect'),
@@ -67,6 +68,7 @@ export function getRendererElements(): RendererElements {
     btnLeave: mustGet<HTMLButtonElement>('btnLeave'),
 
     // Result screen
+    resultTitle: mustGet<HTMLHeadingElement>('resultTitle'),
     resultList: mustGet<HTMLDivElement>('resultList'),
     btnReturnLobby: mustGet<HTMLButtonElement>('btnReturnLobby'),
   };

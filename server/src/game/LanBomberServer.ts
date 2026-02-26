@@ -93,6 +93,7 @@ interface PlayerConn {
   ready: boolean;
   team: number;
   colorIndex: number; // 0-5
+  skin: string;        // character skin, '' = default color
   state: PlayerLifeState;
   stats: PlayerStats;
   trappedUntilTick: number;
@@ -307,6 +308,7 @@ export class LanBomberServer {
         ready: false,
         team: this.assignTeamOnJoin(),
         colorIndex,
+        skin: '',
         state: 'Alive',
         stats: { ...DEFAULT_STATS },
         trappedUntilTick: -1,
@@ -561,6 +563,11 @@ export class LanBomberServer {
             text
           }
         });
+        return;
+      }
+      case 'SetSkin': {
+        player.skin = msg.payload.skin.slice(0, 32);
+        this.sendRoomState();
         return;
       }
       case 'Ping': {
@@ -922,7 +929,6 @@ export class LanBomberServer {
 
   private tryPlaceBalloon(p: PlayerConn): void {
     if (p.state !== 'Alive') return;
-    if (p.move.moving) return; // simple rule for determinism
 
     const pos = this.getPlayerOccupyTile(p);
     const x = pos.x;
@@ -1223,7 +1229,8 @@ export class LanBomberServer {
         state: p.state,
         team: p.team,
         stats: p.stats,
-        invulnerable: this.tick < p.invulnUntilTick
+        invulnerable: this.tick < p.invulnUntilTick,
+        skin: p.skin
       };
     });
 
@@ -1283,7 +1290,8 @@ export class LanBomberServer {
         id: p.id,
         name: p.name,
         team: p.team,
-        colorIndex: p.colorIndex
+        colorIndex: p.colorIndex,
+        skin: p.skin
       })),
       readyStates: Object.fromEntries([...this.players.values()].map((p) => [p.id, p.ready])),
       hostId: this.hostId,

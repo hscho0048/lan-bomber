@@ -30,7 +30,7 @@ export interface PlayerStats {
 export const DEFAULT_STATS: PlayerStats = {
   speed: 3.0,
   balloonCount: 1,
-  power: 2,
+  power: 1,
   needle: 0
 };
 

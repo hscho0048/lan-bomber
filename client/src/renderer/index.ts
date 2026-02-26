@@ -4,6 +4,7 @@ import {
   INPUT_SEND_RATE,
   SNAPSHOT_RATE,
   TICK_RATE,
+  TICK_MS,
   parseServerMessage,
   stringifyMessage,
   type ClientToServerMessage,
@@ -48,6 +49,15 @@ let snapshotInterpDuration = 1000 / SNAPSHOT_RATE;
 let serverTickEstimate = 0;
 let pingMs = 0;
 let inputSeq = 0;
+
+// Local tick clock: track when the last snapshot arrived so we can
+// interpolate the current server tick between snapshot updates (20Hz → 60Hz).
+let lastSnapshotTick = 0;
+let lastSnapshotArrivalTime = 0;
+
+// Input rate limiter for the rAF-integrated input loop
+const INPUT_INTERVAL_MS = 1000 / INPUT_SEND_RATE;
+let lastInputSentTime = 0;
 
 let discoveryUnsub: (() => void) | null = null;
 const lanApi = window.lanApi;
@@ -101,19 +111,22 @@ function send(msg: ClientToServerMessage) {
 }
 
 function onSnapshot(snap: SnapshotPayload) {
+  const now = performance.now();
+  lastSnapshotTick = snap.tick;
+  lastSnapshotArrivalTime = now;
   serverTickEstimate = snap.tick;
 
   if (!snapshotCurr) {
     snapshotCurr = snap;
     snapshotPrev = null;
-    snapshotInterpStart = performance.now();
+    snapshotInterpStart = now;
     snapshotInterpDuration = 1000 / SNAPSHOT_RATE;
     return;
   }
 
   snapshotPrev = snapshotCurr;
   snapshotCurr = snap;
-  snapshotInterpStart = performance.now();
+  snapshotInterpStart = now;
 
   const dtTicks = Math.max(1, snapshotCurr.tick - snapshotPrev.tick);
   snapshotInterpDuration = (dtTicks * 1000) / TICK_RATE;
@@ -122,7 +135,9 @@ function onSnapshot(snap: SnapshotPayload) {
 function onEvent(ev: EventMessagePayload) {
   if (ev.type === 'RoundEnded') {
     const ranking: Array<{ id: string; name: string; colorIndex: number }> = ev.payload.ranking ?? [];
-    renderResultScreen(el, ranking, myId);
+    // Draw = FFA with no single winner (timer ran out or everyone died simultaneously)
+    const isDraw = ev.payload.mode === 'FFA' && !ev.payload.winnerId;
+    renderResultScreen(el, ranking, myId, isDraw);
     setScreen(el, 'result');
     return;
   }
@@ -160,6 +175,9 @@ function connect(ip: string, port: number) {
       pendingHostRoomName = null;
     }
     send({ type: 'JoinRoom', payload });
+    // Send saved skin so other players see our character immediately
+    const savedSkin = localStorage.getItem('playerSkin');
+    if (savedSkin) send({ type: 'SetSkin', payload: { skin: savedSkin } });
   };
 
   ws.onmessage = (ev) => {
@@ -249,32 +267,14 @@ function disconnect() {
 }
 
 // ========================
-// Input / Ping loops
+// Ping loop
 // ========================
-
-function startInputLoop() {
-  const intervalMs = 1000 / INPUT_SEND_RATE;
-  setInterval(() => {
-    if (!ws || ws.readyState !== WebSocket.OPEN || !startGame) return;
-
-    send({
-      type: 'Input',
-      payload: {
-        seq: inputSeq++,
-        tick: serverTickEstimate,
-        moveDir: input.computeMoveDir(),
-        placeBalloon: input.consumePlaceQueued(),
-        useNeedleSlot: input.consumeNeedleSlotQueued()
-      }
-    });
-  }, intervalMs);
-}
 
 function startPingLoop() {
   setInterval(() => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     send({ type: 'Ping', payload: { clientTime: performance.now() } });
-  }, 1000);
+  }, 500);
 }
 
 function startWebRoomPolling(host: string, port: number) {
@@ -378,6 +378,29 @@ async function runWebLanScan(port: number): Promise<void> {
 function draw() {
   requestAnimationFrame(draw);
 
+  const now = performance.now();
+
+  // Send input from the rAF loop so it's always in sync with the render frame.
+  // Rate-limited to INPUT_SEND_RATE (60 Hz). Using a local tick clock gives the
+  // server a more accurate tick estimate than waiting for the next snapshot.
+  if (ws && ws.readyState === WebSocket.OPEN && startGame) {
+    if (now - lastInputSentTime >= INPUT_INTERVAL_MS) {
+      lastInputSentTime = now;
+      const elapsedTicks = Math.floor((now - lastSnapshotArrivalTime) / TICK_MS);
+      const tickEstimate = lastSnapshotTick + elapsedTicks;
+      send({
+        type: 'Input',
+        payload: {
+          seq: inputSeq++,
+          tick: tickEstimate,
+          moveDir: input.computeMoveDir(),
+          placeBalloon: input.consumePlaceQueued(),
+          useNeedleSlot: input.consumeNeedleSlotQueued()
+        }
+      });
+    }
+  }
+
   ctx.clearRect(0, 0, el.canvas.width, el.canvas.height);
 
   if (!startGame) {
@@ -399,6 +422,70 @@ function draw() {
     pingMs,
     myId
   });
+}
+
+// ========================
+// Character Picker
+// ========================
+
+const SKINS: Array<{ id: string; label: string; premium?: boolean }> = [
+  { id: 'blue',     label: '파랑' },
+  { id: 'green',    label: '초록' },
+  { id: 'purple',   label: '보라' },
+  { id: 'red',      label: '빨강' },
+  { id: 'white',    label: '하양' },
+  { id: 'yellow',   label: '노랑' },
+  { id: 'Chiikawa', label: '치이카와', premium: true },
+];
+
+function openCharPicker() {
+  const modal = document.getElementById('charPickerModal')!;
+  const grid  = document.getElementById('charPickerGrid')!;
+  const current = localStorage.getItem('playerSkin') ?? '';
+  grid.innerHTML = '';
+
+  for (const skin of SKINS) {
+    const card = document.createElement('div');
+    card.className = 'char-card' + (current === skin.id ? ' selected' : '');
+
+    const img = document.createElement('img');
+    img.src = `assests/images/characters/${skin.id}/idle.svg`;
+    img.alt = skin.label;
+
+    const nameEl = document.createElement('div');
+    nameEl.className = 'char-card-name';
+    nameEl.textContent = skin.label;
+
+    card.appendChild(img);
+    card.appendChild(nameEl);
+
+    if (skin.premium) {
+      const badge = document.createElement('div');
+      badge.className = 'char-card-premium';
+      badge.textContent = '⭐ 프리미엄';
+      card.appendChild(badge);
+    }
+
+    card.onclick = () => {
+      if (skin.premium) {
+        alert('호성이한테 1만원을 주면 적용');
+        return;
+      }
+      localStorage.setItem('playerSkin', skin.id);
+      // Broadcast skin change to server so other players can see it
+      send({ type: 'SetSkin', payload: { skin: skin.id } });
+      closeCharPicker();
+      refreshRoomStateUI();
+    };
+
+    grid.appendChild(card);
+  }
+
+  modal.classList.remove('hidden');
+}
+
+function closeCharPicker() {
+  document.getElementById('charPickerModal')!.classList.add('hidden');
 }
 
 // ========================
@@ -493,6 +580,12 @@ function bindUI() {
   };
 
   // Room screen
+  el.btnCharPicker.onclick = openCharPicker;
+  document.getElementById('btnCloseCharPicker')!.onclick = closeCharPicker;
+  document.getElementById('charPickerModal')!.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeCharPicker();
+  });
+
   el.btnLeaveRoom.onclick = () => {
     disconnect();
     startGame = null;
@@ -595,7 +688,6 @@ async function init() {
   }
 
   startPingLoop();
-  startInputLoop();
   draw();
 }
 

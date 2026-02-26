@@ -2,75 +2,69 @@ import type { MoveDir } from '@lan-bomber/shared';
 import type { InputState } from './types';
 
 export function createInputController() {
-  const keyDown = new Set<string>();
+  // Direction press-order stack: most recently pressed is at the end.
+  // Only currently-held directions are in the stack, so the last element
+  // is always the "most recently pressed and still held" direction.
+  const dirStack: MoveDir[] = [];
+
   const state: InputState = {
     preferredDir: 'None',
     placeQueued: false,
     needleSlotQueued: -1
   };
 
-  const onKeyDown = (e: KeyboardEvent) => {
-    keyDown.add(e.code);
+  function codeToDir(code: string): MoveDir | null {
+    if (code === 'ArrowUp' || code === 'KeyW') return 'Up';
+    if (code === 'ArrowDown' || code === 'KeyS') return 'Down';
+    if (code === 'ArrowLeft' || code === 'KeyA') return 'Left';
+    if (code === 'ArrowRight' || code === 'KeyD') return 'Right';
+    return null;
+  }
 
-    if (e.code === 'ArrowUp' || e.code === 'KeyW') state.preferredDir = 'Up';
-    if (e.code === 'ArrowDown' || e.code === 'KeyS') state.preferredDir = 'Down';
-    if (e.code === 'ArrowLeft' || e.code === 'KeyA') state.preferredDir = 'Left';
-    if (e.code === 'ArrowRight' || e.code === 'KeyD') state.preferredDir = 'Right';
+  function isTypingTarget(e: KeyboardEvent): boolean {
+    const tag = (e.target as HTMLElement)?.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA';
+  }
+
+  const onKeyDown = (e: KeyboardEvent) => {
+    // Don't steal keypresses while the user is typing in a text field
+    if (isTypingTarget(e)) return;
+
+    const dir = codeToDir(e.code);
+    if (dir) {
+      // Prevent arrow keys from scrolling the page during gameplay
+      e.preventDefault();
+      // Remove existing entry (handles browser auto-repeat keydown events)
+      const idx = dirStack.indexOf(dir);
+      if (idx >= 0) dirStack.splice(idx, 1);
+      dirStack.push(dir);
+      state.preferredDir = dir;
+    }
 
     if (e.code === 'Space') {
       state.placeQueued = true;
       e.preventDefault();
     }
 
-    if (e.code === 'KeyZ') {
-      state.needleSlotQueued = 0;
-      e.preventDefault();
-    }
-    if (e.code === 'KeyX') {
-      state.needleSlotQueued = 1;
-      e.preventDefault();
-    }
-    if (e.code === 'KeyC') {
-      state.needleSlotQueued = 2;
-      e.preventDefault();
-    }
+    if (e.code === 'KeyZ') { state.needleSlotQueued = 0; e.preventDefault(); }
+    if (e.code === 'KeyX') { state.needleSlotQueued = 1; e.preventDefault(); }
+    if (e.code === 'KeyC') { state.needleSlotQueued = 2; e.preventDefault(); }
   };
 
   const onKeyUp = (e: KeyboardEvent) => {
-    keyDown.delete(e.code);
-  };
+    if (isTypingTarget(e)) return;
 
-  const isDirDown = (dir: MoveDir, up: boolean, down: boolean, left: boolean, right: boolean): boolean => {
-    switch (dir) {
-      case 'Up':
-        return up;
-      case 'Down':
-        return down;
-      case 'Left':
-        return left;
-      case 'Right':
-        return right;
-      default:
-        return false;
+    const dir = codeToDir(e.code);
+    if (dir) {
+      const idx = dirStack.indexOf(dir);
+      if (idx >= 0) dirStack.splice(idx, 1);
+      // Fall back to the most recently pressed key still held, or stop
+      state.preferredDir = dirStack.length > 0 ? dirStack[dirStack.length - 1] : 'None';
     }
   };
 
-  const computeMoveDir = (): MoveDir => {
-    const up = keyDown.has('ArrowUp') || keyDown.has('KeyW');
-    const down = keyDown.has('ArrowDown') || keyDown.has('KeyS');
-    const left = keyDown.has('ArrowLeft') || keyDown.has('KeyA');
-    const right = keyDown.has('ArrowRight') || keyDown.has('KeyD');
-
-    if (state.preferredDir !== 'None' && isDirDown(state.preferredDir, up, down, left, right)) {
-      return state.preferredDir;
-    }
-
-    if (up) return 'Up';
-    if (down) return 'Down';
-    if (left) return 'Left';
-    if (right) return 'Right';
-    return 'None';
-  };
+  // Direction is always up-to-date in state.preferredDir via the stack
+  const computeMoveDir = (): MoveDir => state.preferredDir;
 
   const consumePlaceQueued = (): boolean => {
     const queued = state.placeQueued;

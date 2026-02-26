@@ -16,12 +16,14 @@ function loadImg(src: string): HTMLImageElement {
   return img;
 }
 
+// All character skin folders (including premium skins)
+const ALL_SKINS = [...CHAR_COLORS, 'Chiikawa'];
+
 // Pre-warm all assets
 export function preloadAssets() {
-  const colors = CHAR_COLORS;
-  for (const color of colors) {
-    loadImg(`assests/images/characters/${color}/idle.svg`);
-    loadImg(`assests/images/characters/${color}/panic.svg`);
+  for (const skin of ALL_SKINS) {
+    loadImg(`assests/images/characters/${skin}/idle.svg`);
+    loadImg(`assests/images/characters/${skin}/panic.svg`);
   }
   const waterballs = ['waterball', 'waterball_green', 'waterball_purple', 'waterball_red', 'waterball_pink', 'waterball_yellow'];
   for (const w of waterballs) {
@@ -326,11 +328,13 @@ export function drawGameFrame(opts: DrawOptions) {
       const cy = pos.y * tileSize;
       const colorIndex = (startGame.playerColors ?? {})[p.id] ?? 0;
       const colorName = CHAR_COLORS[colorIndex] ?? 'blue';
+      // Use server-provided skin (same for all clients)
+      const skinName = p.skin || colorName;
 
       if (p.state === 'Dead') {
         // Dead: faded X mark
         ctx.globalAlpha = 0.4;
-        const imgDead = loadImg(`assests/images/characters/${colorName}/idle.svg`);
+        const imgDead = loadImg(`assests/images/characters/${skinName}/idle.svg`);
         if (imgDead.complete && imgDead.naturalWidth > 0) {
           ctx.drawImage(imgDead, cx - tileSize * 0.4, cy - tileSize * 0.4, tileSize * 0.8, tileSize * 0.8);
         }
@@ -346,8 +350,8 @@ export function drawGameFrame(opts: DrawOptions) {
         ctx.stroke();
       } else {
         const imgSrc = p.state === 'Trapped'
-          ? `assests/images/characters/${colorName}/panic.svg`
-          : `assests/images/characters/${colorName}/idle.svg`;
+          ? `assests/images/characters/${skinName}/panic.svg`
+          : `assests/images/characters/${skinName}/idle.svg`;
         const img = loadImg(imgSrc);
 
         if (img.complete && img.naturalWidth > 0) {
