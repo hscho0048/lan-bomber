@@ -735,6 +735,17 @@ export class LanBomberServer {
     this.explosionCounter = 0;
     this.itemCounter = 0;
 
+    // Spawn preset items defined in the map
+    if (preset.presetItems) {
+      for (const pi of preset.presetItems) {
+        if (this.grid[pi.y]?.[pi.x] === 'Empty') {
+          const itemId = `i${++this.itemCounter}`;
+          this.items.set(itemId, { id: itemId, x: pi.x, y: pi.y, itemType: pi.itemType });
+        }
+      }
+      this.log.info(`Spawned ${this.items.size} preset items.`);
+    }
+
     this.sendEvent('ServerNotice', { text: 'Game started!' });
 
     // Send an immediate snapshot
@@ -785,6 +796,13 @@ export class LanBomberServer {
       protect(sp.x - 1, sp.y);
       protect(sp.x, sp.y + 1);
       protect(sp.x, sp.y - 1);
+    }
+
+    // Preset item positions must stay empty (no soft blocks)
+    if (preset.presetItems) {
+      for (const item of preset.presetItems) {
+        protect(item.x, item.y);
+      }
     }
 
     // Fill soft blocks deterministically

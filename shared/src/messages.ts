@@ -16,6 +16,12 @@ export interface XY {
   y: number;
 }
 
+export interface MapPresetItem {
+  x: number;
+  y: number;
+  itemType: ItemType;
+}
+
 export interface MapPreset {
   id: string;
   name: string;
@@ -23,6 +29,7 @@ export interface MapPreset {
   height: number;
   grid: string[]; // length=height, string length=width; '#'=SolidWall '.'=Empty
   spawnPoints: XY[]; // at least 6 recommended
+  presetItems?: MapPresetItem[]; // items placed at game start (guaranteed empty, no soft blocks)
 }
 
 export type NetMessage<TType extends string, TPayload> = {
