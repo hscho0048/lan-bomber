@@ -297,6 +297,12 @@ export class LanBomberServer {
     });
 
     this.wss.on('connection', (ws: WebSocket, req: { socket: { remoteAddress?: string } }) => {
+      if (this.phase === 'inGame' || this.phase === 'postGame') {
+        ws.send(stringifyMessage({ type: 'ServerError', payload: { message: '게임이 진행 중입니다. 게임이 끝난 후 입장하세요.' } }));
+        ws.close();
+        return;
+      }
+
       if (this.players.size >= MAX_PLAYERS) {
         ws.send(stringifyMessage({ type: 'ServerError', payload: { message: 'Room is full (max 6).' } }));
         ws.close();
