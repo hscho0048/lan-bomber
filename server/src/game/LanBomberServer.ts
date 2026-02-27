@@ -519,6 +519,23 @@ export class LanBomberServer {
         }
         return;
       }
+      case 'ShuffleTeams': {
+        if (player.id !== this.hostId) return;
+        if (this.mode !== 'TEAM') return;
+        if (this.phase !== 'lobby') return;
+        // Fisher-Yates shuffle of all players, then split evenly
+        const allPlayers = Array.from(this.players.values());
+        for (let i = allPlayers.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [allPlayers[i], allPlayers[j]] = [allPlayers[j], allPlayers[i]];
+        }
+        const half = Math.ceil(allPlayers.length / 2);
+        allPlayers.forEach((p, idx) => { p.team = idx < half ? 0 : 1; });
+        // Reset ready states so game can't start accidentally
+        for (const p of this.players.values()) p.ready = false;
+        this.sendRoomState();
+        return;
+      }
       case 'StartRequest': {
         if (player.id !== this.hostId) return;
         if (this.phase !== 'lobby') return;
@@ -594,10 +611,12 @@ export class LanBomberServer {
     this.phase = 'starting';
     this.startTick = this.tick + TICK_RATE; // ~1 second countdown
 
-    // Build player colors map for clients
+    // Build player colors and skins maps for clients
     const playerColors: Record<string, number> = {};
+    const playerSkins: Record<string, string> = {};
     for (const p of this.players.values()) {
       playerColors[p.id] = p.colorIndex;
+      playerSkins[p.id] = p.skin ?? '';
     }
 
     const startMsg: ServerToClientMessage = {
@@ -608,7 +627,8 @@ export class LanBomberServer {
         startTick: this.startTick,
         mode: this.mode,
         gameDurationSeconds: this.gameDurationSeconds,
-        playerColors
+        playerColors,
+        playerSkins
       }
     };
     this.broadcast(startMsg);
@@ -753,14 +773,11 @@ export class LanBomberServer {
   }
 
   private pickSpawnPoints(preset: MapPreset): XY[] {
-    // In TEAM mode we keep spawn points stable; in FFA shuffle
+    // Deterministic shuffle based on game seed RNG (always randomise regardless of mode)
     const points = [...preset.spawnPoints];
-    if (this.mode === 'FFA') {
-      // Deterministic shuffle based on RNG
-      for (let i = points.length - 1; i > 0; i--) {
-        const j = this.rng.int(0, i);
-        [points[i], points[j]] = [points[j], points[i]];
-      }
+    for (let i = points.length - 1; i > 0; i--) {
+      const j = this.rng.int(0, i);
+      [points[i], points[j]] = [points[j], points[i]];
     }
     return points;
   }
@@ -1009,25 +1026,25 @@ export class LanBomberServer {
     this.sendEvent('PlayerRescued', { playerId: p.id, byPlayerId: p.id });
   }
 
-  private buildRanking(): Array<{ id: string; name: string; colorIndex: number; team: number }> {
+  private buildRanking(): Array<{ id: string; name: string; colorIndex: number; team: number; skin: string }> {
     // Survivors rank above dead; dead ranked in reverse death order (last to die = higher rank)
-    const survivors: Array<{ id: string; name: string; colorIndex: number; team: number }> = [];
+    const survivors: Array<{ id: string; name: string; colorIndex: number; team: number; skin: string }> = [];
     for (const p of this.players.values()) {
       if (p.state !== 'Dead') {
-        survivors.push({ id: p.id, name: p.name, colorIndex: p.colorIndex, team: p.team });
+        survivors.push({ id: p.id, name: p.name, colorIndex: p.colorIndex, team: p.team, skin: p.skin ?? '' });
       }
     }
 
     // deathOrder[0] = first to die = last place
     // Reverse it so last-to-die comes first
-    const deadByRank: Array<{ id: string; name: string; colorIndex: number; team: number }> = [];
+    const deadByRank: Array<{ id: string; name: string; colorIndex: number; team: number; skin: string }> = [];
     for (let i = this.deathOrder.length - 1; i >= 0; i--) {
       const pid = this.deathOrder[i];
       const p = this.players.get(pid);
       if (p) {
-        deadByRank.push({ id: p.id, name: p.name, colorIndex: p.colorIndex, team: p.team });
+        deadByRank.push({ id: p.id, name: p.name, colorIndex: p.colorIndex, team: p.team, skin: p.skin ?? '' });
       } else {
-        deadByRank.push({ id: pid, name: '(disconnected)', colorIndex: 0, team: 0 });
+        deadByRank.push({ id: pid, name: '(disconnected)', colorIndex: 0, team: 0, skin: '' });
       }
     }
 

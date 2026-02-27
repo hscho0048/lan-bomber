@@ -56,6 +56,7 @@ export type SetMapPayload = { mapId: string };
 export type SetTeamPayload = { team: number };
 export type SetGameDurationPayload = { seconds: number };
 export type StartRequestPayload = {};
+export type ShuffleTeamsPayload = {};
 export type PingPayload = { clientTime: number };
 export type ChatSendPayload = { text: string };
 export type SetSkinPayload = { skin: string };
@@ -69,6 +70,7 @@ export type ClientToServerMessage =
   | NetMessage<'SetTeam', SetTeamPayload>
   | NetMessage<'SetGameDuration', SetGameDurationPayload>
   | NetMessage<'StartRequest', StartRequestPayload>
+  | NetMessage<'ShuffleTeams', ShuffleTeamsPayload>
   | NetMessage<'ChatSend', ChatSendPayload>
   | NetMessage<'Ping', PingPayload>
   | NetMessage<'SetSkin', SetSkinPayload>;
@@ -101,6 +103,7 @@ export interface StartGamePayload {
   mode: GameMode;
   gameDurationSeconds: number;
   playerColors: Record<PlayerId, number>; // playerId -> colorIndex (0-5)
+  playerSkins: Record<PlayerId, string>;  // playerId -> skin folder name
 }
 
 export interface PlayerSnapshot {

@@ -120,6 +120,9 @@ export function parseClientMessage(raw: string): ClientToServerMessage | null {
     case 'StartRequest': {
       return { type: 'StartRequest', payload: {} };
     }
+    case 'ShuffleTeams': {
+      return { type: 'ShuffleTeams', payload: {} };
+    }
     case 'ChatSend': {
       if (!isString(payload.text)) return null;
       const text = payload.text.trim().slice(0, 100);
@@ -195,6 +198,7 @@ export function parseServerMessage(raw: string): ServerToClientMessage | null {
       if (!isGameMode(payload.mode)) return null;
       const gameDurationSeconds = isInt(payload.gameDurationSeconds) ? (payload.gameDurationSeconds as number) : 120;
       const playerColors = isRecord(payload.playerColors) ? (payload.playerColors as Record<string, number>) : {};
+      const playerSkins = isRecord(payload.playerSkins) ? (payload.playerSkins as Record<string, string>) : {};
       return {
         type: 'StartGame',
         payload: {
@@ -203,7 +207,8 @@ export function parseServerMessage(raw: string): ServerToClientMessage | null {
           startTick: payload.startTick,
           mode: payload.mode,
           gameDurationSeconds,
-          playerColors
+          playerColors,
+          playerSkins
         }
       };
     }

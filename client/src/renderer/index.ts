@@ -499,6 +499,10 @@ function bindRoomScreen(): void {
     send({ type: 'SetTeam', payload: { team: myPlayer.team === 0 ? 1 : 0 } });
   };
 
+  el.btnShuffleTeams.onclick = () => {
+    send({ type: 'ShuffleTeams', payload: {} });
+  };
+
   el.modeSelect.onchange = () => {
     send({ type: 'SetMode', payload: { mode: el.modeSelect.value as GameMode } });
   };
@@ -618,7 +622,8 @@ function draw(): void {
     myId: state.myId,
     playerTeams,
     notifications: state.notifications,
-    now
+    now,
+    playerSkins: state.startGame.playerSkins ?? {}
   });
 }
 

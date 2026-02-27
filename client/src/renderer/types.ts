@@ -50,6 +50,7 @@ export type RendererElements = {
   chatInput: HTMLInputElement;
   btnChatSend: HTMLButtonElement;
   btnSwitchTeam: HTMLButtonElement;
+  btnShuffleTeams: HTMLButtonElement;
   teamCountDisplay: HTMLDivElement;
 
   // Game screen

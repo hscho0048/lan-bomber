@@ -6,5 +6,5 @@
       <stop offset="100%" stop-color="#cc0066" stop-opacity="0.6"></stop>
     </radialGradient>
   </defs>
-  <circle cx="50" cy="55" r="30" fill="url(#waterGradPink)" stroke="#800040" stroke-width="2.5" opacity="0.8"></circle>
+  <circle cx="50" cy="55" r="30" fill="url(#waterGradPink)" stroke="#800040" stroke-width="2.5"></circle>
 </svg>

@@ -58,6 +58,7 @@ export function getRendererElements(): RendererElements {
     chatInput: mustGet<HTMLInputElement>('chatInput'),
     btnChatSend: mustGet<HTMLButtonElement>('btnChatSend'),
     btnSwitchTeam: mustGet<HTMLButtonElement>('btnSwitchTeam'),
+    btnShuffleTeams: mustGet<HTMLButtonElement>('btnShuffleTeams'),
     teamCountDisplay: mustGet<HTMLDivElement>('teamCountDisplay'),
 
     // Game screen

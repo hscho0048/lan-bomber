@@ -7,7 +7,7 @@ import {
   SOFT_FILL, SOFT_BORDER, SOFT_CRATE,
   PLAYER_FALLBACK,
   TEAM_A_COLOR, TEAM_B_COLOR, TEAM_A_BG, TEAM_A_BORDER, TEAM_B_BG, TEAM_B_BORDER,
-  S, FUSE_WARN
+  S
 } from './constants';
 
 // ========================
@@ -49,8 +49,24 @@ export function preloadAssets() {
 
 const WATERBALL_SVGS = ['waterball', 'waterball_green', 'waterball_purple', 'waterball_red', 'waterball_pink', 'waterball_yellow'];
 
+// Maps skin folder name → waterball colorIndex (fallback to slot colorIndex if not found)
+const SKIN_TO_WATERBALL: Record<string, number> = {
+  blue: 0, green: 1, purple: 2, red: 3, white: 4, yellow: 5,
+};
+
 function getWaterballSrc(colorIndex: number): string {
   return `assests/images/waterball/${WATERBALL_SVGS[colorIndex] ?? 'waterball'}.svg`;
+}
+
+function getWaterballSrcForPlayer(
+  ownerId: string,
+  playerColors: Record<string, number>,
+  playerSkins: Record<string, string>
+): string {
+  const skin = playerSkins[ownerId] ?? '';
+  const skinIdx = SKIN_TO_WATERBALL[skin];
+  const colorIndex = skinIdx !== undefined ? skinIdx : (playerColors[ownerId] ?? 0);
+  return getWaterballSrc(colorIndex);
 }
 
 function getItemSrc(type: ItemType): string {
@@ -201,10 +217,12 @@ function drawExplosions(ctx: CanvasRenderingContext2D, explosions: SnapshotPaylo
 }
 
 // Stable per-balloon phase offset so each balloon breathes independently.
+const BREATHE_PERIOD = 700; // ms
+
 function balloonPhaseOffset(id: string): number {
   let h = 0;
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
-  return (h % 1200);
+  return (h % BREATHE_PERIOD);
 }
 
 function drawBalloons(
@@ -213,22 +231,19 @@ function drawBalloons(
   tick: number,
   tileSize: number,
   playerColors: Record<string, number>,
+  playerSkins: Record<string, string>,
   now: number
 ): void {
-  const BREATHE_PERIOD = 1200; // ms — matches balloon-breathe 1.2s
-
   for (const b of balloons) {
-    const colorIndex = (playerColors ?? {})[b.ownerId] ?? 0;
-    const img = loadImg(getWaterballSrc(colorIndex));
+    const img = loadImg(getWaterballSrcForPlayer(b.ownerId, playerColors, playerSkins));
     const pad = tileSize * S.BALLOON_PAD;
 
-    // balloon-breathe: scale(1.06, 0.94) at 50%, transform-origin 50% 90%
     const t = ((now + balloonPhaseOffset(b.id)) % BREATHE_PERIOD) / BREATHE_PERIOD;
-    const factor = (1 - Math.cos(t * Math.PI * 2)) / 2; // 0→1→0, ease-in-out via cosine
-    const scaleX = 1 + factor * 0.06;
-    const scaleY = 1 - factor * 0.06;
+    const factor = (1 - Math.cos(t * Math.PI * 2)) / 2; // 0→1→0 ease-in-out
+    const scaleX = 1 + factor * 0.18;
+    const scaleY = 1 - factor * 0.18;
 
-    // pivot at (50%, 90%) of the drawn balloon rect — matches CSS transform-origin
+    // pivot at (50%, 90%) — bottom-centre so base stays grounded
     const size = tileSize - pad * 2;
     const pivotX = b.x * tileSize + pad + size * 0.5;
     const pivotY = b.y * tileSize + pad + size * 0.9;
@@ -248,18 +263,6 @@ function drawBalloons(
     }
 
     ctx.restore();
-
-    // Fuse arc drawn outside the breathe transform (stays stable)
-    const fuseProgress = Math.max(0, (b.explodeTick - tick) / (2.5 * TICK_RATE));
-    if (fuseProgress > 0) {
-      const cx = b.x * tileSize + tileSize / 2;
-      const cy = b.y * tileSize + tileSize / 2;
-      ctx.strokeStyle = fuseProgress < FUSE_WARN ? '#ff4444' : '#ffcc00';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(cx, cy, tileSize * 0.4, -Math.PI / 2, -Math.PI / 2 + fuseProgress * Math.PI * 2);
-      ctx.stroke();
-    }
   }
 }
 
@@ -540,10 +543,11 @@ export function updatePlayerStatusPanel(
     groups.push({ players: snap.players });
   }
 
-  let html = '';
+  const groupHtmlParts: string[] = [];
   for (const g of groups) {
+    let groupHtml = '<div class="psp-team-group">';
     if (g.header) {
-      html += `<div class="psp-team-header" style="color:${g.headerColor}">${g.header}</div>`;
+      groupHtml += `<span class="psp-team-header" style="color:${g.headerColor}">${g.header}</span>`;
     }
     for (const p of g.players) {
       const colorIndex = (startGame.playerColors ?? {})[p.id] ?? 0;
@@ -557,13 +561,16 @@ export function updatePlayerStatusPanel(
       } else {
         icon = '●'; iconClass = 'psp-icon-alive';
       }
-      html += `<div class="psp-entry">
+      groupHtml += `<div class="psp-entry">
         <span class="${iconClass}" style="${p.state === 'Alive' ? `color:${color}` : ''}">${icon}</span>
-        <span style="color:#c9d1d9;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${p.name}">${p.name}</span>
+        <span style="color:#c9d1d9;max-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${p.name}">${p.name}</span>
       </div>`;
     }
+    groupHtml += '</div>';
+    groupHtmlParts.push(groupHtml);
   }
-  panel.innerHTML = html;
+  panel.innerHTML = groupHtmlParts.join('<div class="psp-team-divider"></div>');
+
 }
 
 // ========================
@@ -584,6 +591,7 @@ export type DrawOptions = {
   playerTeams?: Record<string, number>;
   notifications: Notification[];
   now: number;
+  playerSkins: Record<string, string>;
 };
 
 // ========================
@@ -594,7 +602,7 @@ export function drawGameFrame(opts: DrawOptions): void {
   const {
     ctx, el, startGame,
     snapshotCurr, snapshotPrev, snapshotInterpStart, snapshotInterpDuration,
-    serverTickEstimate, pingMs, myId, playerTeams, notifications, now
+    serverTickEstimate, pingMs, myId, playerTeams, notifications, now, playerSkins
   } = opts;
 
   const preset = getMapPreset(startGame.mapId);
@@ -621,7 +629,7 @@ export function drawGameFrame(opts: DrawOptions): void {
     drawBlocks(ctx, snapshotCurr.blocks, tileSize);
     drawItems(ctx, snapshotCurr.items, tileSize);
     drawExplosions(ctx, snapshotCurr.explosions, tileSize);
-    drawBalloons(ctx, snapshotCurr.balloons, snapshotCurr.tick, tileSize, startGame.playerColors ?? {}, now);
+    drawBalloons(ctx, snapshotCurr.balloons, snapshotCurr.tick, tileSize, startGame.playerColors ?? {}, playerSkins, now);
     drawPlayers(ctx, snapshotCurr.players, snapshotPrev, snapshotCurr, alpha, tileSize, startGame, playerTeams, myId, snapshotCurr.tick);
   }
 
