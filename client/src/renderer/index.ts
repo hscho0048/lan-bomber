@@ -525,10 +525,14 @@ function bindRoomScreen(): void {
     send({ type: 'ShuffleTeams', payload: {} });
   };
 
-  el.modeSelect.onchange = () => {
-    const mode = el.modeSelect.value as GameMode;
-    send({ type: 'SetMode', payload: { mode } });
-    // Auto-select boss arena for BOSS mode, restore map1 when switching away
+  const syncMapOptions = (mode: GameMode) => {
+    for (const opt of Array.from(el.mapSelect.options)) {
+      if (mode === 'BOSS') {
+        opt.disabled = opt.value !== 'boss_arena';
+      } else {
+        opt.disabled = opt.value === 'boss_arena';
+      }
+    }
     if (mode === 'BOSS' && el.mapSelect.value !== 'boss_arena') {
       el.mapSelect.value = 'boss_arena';
       send({ type: 'SetMap', payload: { mapId: 'boss_arena' } });
@@ -537,6 +541,15 @@ function bindRoomScreen(): void {
       send({ type: 'SetMap', payload: { mapId: 'map1' } });
     }
   };
+
+  el.modeSelect.onchange = () => {
+    const mode = el.modeSelect.value as GameMode;
+    send({ type: 'SetMode', payload: { mode } });
+    syncMapOptions(mode);
+  };
+
+  // Apply on initial render
+  syncMapOptions(el.modeSelect.value as GameMode);
 
   el.mapSelect.onchange = () => {
     send({ type: 'SetMap', payload: { mapId: el.mapSelect.value } });
