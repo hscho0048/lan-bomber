@@ -197,13 +197,12 @@ function drawExplosions(ctx: CanvasRenderingContext2D, explosions: SnapshotPaylo
       if (!tiles || tiles.length === 0) continue;
       const isHoriz = dir === 'left' || dir === 'right';
       const img = isHoriz ? horizontalImg : verticalImg;
-      // horizontal SVG: 40×28 → fill full width, center vertically
-      // vertical SVG:   28×40 → fill full height, center horizontally
-      const ratio = 28 / 40;
-      const drawW = isHoriz ? tileSize        : tileSize * ratio;
-      const drawH = isHoriz ? tileSize * ratio : tileSize;
-      const offX  = isHoriz ? 0               : (tileSize - drawW) / 2;
-      const offY  = isHoriz ? (tileSize - drawH) / 2 : 0;
+      // horizontal SVG 40×28, vertical SVG 28×40 — preserve natural aspect ratio, center on tile
+      const short = tileSize * (28 / 40); // 70% of tile
+      const drawW = isHoriz ? tileSize : short;
+      const drawH = isHoriz ? short    : tileSize;
+      const offX  = isHoriz ? 0                    : (tileSize - short) / 2;
+      const offY  = isHoriz ? (tileSize - short) / 2 : 0;
       for (const t of tiles) {
         if (img.complete && img.naturalWidth > 0) {
           ctx.drawImage(img, t.x * tileSize + offX, t.y * tileSize + offY, drawW, drawH);
