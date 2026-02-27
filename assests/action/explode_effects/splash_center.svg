@@ -1,5 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="80" height="80">
-  <rect x="0" y="0" width="40" height="40" fill="#3498db" opacity="0.8" stroke="#2980b9" stroke-width="2" stroke-opacity="0.6" />
-  <rect x="8" y="8" width="10" height="10" fill="#ffffff" opacity="0.9" />
-  <rect x="26" y="26" width="8" height="8" fill="#2980b9" opacity="0.7" />
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 84 84" width="84" height="84">
+  <path d="M 28,0 L 56,0 L 56,28 L 84,28 L 84,56 L 56,56 L 56,84 L 28,84 L 28,56 L 0,56 L 0,28 L 28,28 Z" fill="#5dade2" opacity="0.8" />
+  
+  <polyline points="0,28 28,28 28,0" stroke="#2980b9" stroke-width="2" stroke-opacity="0.6" fill="none" />
+  <polyline points="56,0 56,28 84,28" stroke="#2980b9" stroke-width="2" stroke-opacity="0.6" fill="none" />
+  <polyline points="84,56 56,56 56,84" stroke="#2980b9" stroke-width="2" stroke-opacity="0.6" fill="none" />
+  <polyline points="28,84 28,56 0,56" stroke="#2980b9" stroke-width="2" stroke-opacity="0.6" fill="none" />
+
+  <rect x="34" y="34" width="16" height="16" fill="#ffffff" opacity="0.7" />
+  
+  <rect x="38" y="0" width="8" height="28" fill="#85c1e9" opacity="0.9" /> <rect x="38" y="56" width="8" height="28" fill="#85c1e9" opacity="0.9" /> <rect x="0" y="38" width="28" height="8" fill="#85c1e9" opacity="0.9" /> <rect x="56" y="38" width="28" height="8" fill="#85c1e9" opacity="0.9" /> </svg>

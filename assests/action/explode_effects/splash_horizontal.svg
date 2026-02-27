@@ -4,5 +4,5 @@
   <line x1="0" y1="1" x2="40" y2="1" stroke="#2980b9" stroke-width="2" stroke-opacity="0.6" />
   <line x1="0" y1="27" x2="40" y2="27" stroke="#2980b9" stroke-width="2" stroke-opacity="0.6" />
   
-  <rect x="0" y="6" width="40" height="8" fill="#85c1e9" opacity="0.9" />
+  <rect x="0" y="10" width="40" height="8" fill="#85c1e9" opacity="0.9" />
 </svg>
