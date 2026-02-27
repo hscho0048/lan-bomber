@@ -39,8 +39,8 @@ export function preloadAssets() {
   loadImg('assests/images/item/item_power.svg');
   loadImg('assests/images/item/item_speed.svg');
   loadImg('assests/action/explode_effects/splash_center.svg');
-  loadImg('assests/action/explode_effects/stream_body.svg');
-  loadImg('assests/action/explode_effects/stream_end.svg');
+  loadImg('assests/action/explode_effects/splash_horizontal.svg');
+  loadImg('assests/action/explode_effects/splahs_vertical.svg');
 }
 
 // ========================
@@ -169,22 +169,20 @@ function drawItems(ctx: CanvasRenderingContext2D, items: SnapshotPayload['items'
 }
 
 function drawExplosions(ctx: CanvasRenderingContext2D, explosions: SnapshotPayload['explosions'], tileSize: number): void {
-  const centerImg = loadImg('assests/action/explode_effects/splash_center.svg');
-  const bodyImg   = loadImg('assests/action/explode_effects/stream_body.svg');
-  const endImg    = loadImg('assests/action/explode_effects/stream_end.svg');
-  const dirAngle: Record<string, number> = { right: 0, down: Math.PI / 2, left: Math.PI, up: -Math.PI / 2 };
+  const centerImg     = loadImg('assests/action/explode_effects/splash_center.svg');
+  const horizontalImg = loadImg('assests/action/explode_effects/splash_horizontal.svg');
+  const verticalImg   = loadImg('assests/action/explode_effects/splahs_vertical.svg');
   const dirs = ['right', 'down', 'left', 'up'] as const;
 
   for (const ex of explosions) {
-    const dirTiles = new Map<string, Array<{ x: number; y: number; dist: number }>>();
+    const dirTiles = new Map<string, Array<{ x: number; y: number }>>();
     for (const t of ex.tiles) {
       if (t.x === ex.originX && t.y === ex.originY) continue;
       const dx = t.x - ex.originX;
       const dy = t.y - ex.originY;
       const dir = dx > 0 ? 'right' : dx < 0 ? 'left' : dy > 0 ? 'down' : 'up';
-      const dist = Math.abs(dx) + Math.abs(dy);
       if (!dirTiles.has(dir)) dirTiles.set(dir, []);
-      dirTiles.get(dir)!.push({ x: t.x, y: t.y, dist });
+      dirTiles.get(dir)!.push({ x: t.x, y: t.y });
     }
 
     if (centerImg.complete && centerImg.naturalWidth > 0) {
@@ -197,16 +195,18 @@ function drawExplosions(ctx: CanvasRenderingContext2D, explosions: SnapshotPaylo
     for (const dir of dirs) {
       const tiles = dirTiles.get(dir);
       if (!tiles || tiles.length === 0) continue;
-      const maxDist = Math.max(...tiles.map(t => t.dist));
-      const angle = dirAngle[dir];
+      const isHoriz = dir === 'left' || dir === 'right';
+      const img = isHoriz ? horizontalImg : verticalImg;
+      // horizontal SVG: 40×28 → fill full width, center vertically
+      // vertical SVG:   28×40 → fill full height, center horizontally
+      const ratio = 28 / 40;
+      const drawW = isHoriz ? tileSize        : tileSize * ratio;
+      const drawH = isHoriz ? tileSize * ratio : tileSize;
+      const offX  = isHoriz ? 0               : (tileSize - drawW) / 2;
+      const offY  = isHoriz ? (tileSize - drawH) / 2 : 0;
       for (const t of tiles) {
-        const img = t.dist === maxDist ? endImg : bodyImg;
         if (img.complete && img.naturalWidth > 0) {
-          ctx.save();
-          ctx.translate(t.x * tileSize + tileSize / 2, t.y * tileSize + tileSize / 2);
-          ctx.rotate(angle);
-          ctx.drawImage(img, -tileSize / 2, -tileSize / 2, tileSize, tileSize);
-          ctx.restore();
+          ctx.drawImage(img, t.x * tileSize + offX, t.y * tileSize + offY, drawW, drawH);
         } else {
           ctx.fillStyle = 'rgba(0,150,255,0.4)';
           ctx.fillRect(t.x * tileSize, t.y * tileSize, tileSize, tileSize);
