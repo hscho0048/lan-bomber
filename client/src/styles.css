@@ -759,6 +759,12 @@ h1, h2, h3 { margin: 0; font-weight: 700; }
 .team-a-name { color: #60a5fa; }
 .team-b-name { color: #f87171; }
 
+/* BOSS mode result */
+.result-entry.rank-1.result-entry-winner {
+  border-color: #ffd700;
+  background: linear-gradient(135deg, #1a1200, #0d1a00);
+}
+
 /* ========================
    CHARACTER PICKER
 ======================== */

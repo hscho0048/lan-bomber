@@ -3,7 +3,7 @@ import type { PlayerStats } from './constants';
 export type PlayerId = string;
 
 export type MoveDir = 'None' | 'Up' | 'Down' | 'Left' | 'Right';
-export type GameMode = 'FFA' | 'TEAM';
+export type GameMode = 'FFA' | 'TEAM' | 'BOSS';
 
 export type PlayerLifeState = 'Alive' | 'Trapped' | 'Dead';
 
@@ -151,6 +151,15 @@ export interface BlockSnapshot {
   kind: BlockKind;
 }
 
+export interface BossSnapshot {
+  hp: number;
+  maxHp: number;
+  x: number;      // top-left tile X of 2×2 boss body
+  y: number;      // top-left tile Y of 2×2 boss body
+  state: 'Alive' | 'Dead';
+  phase: number;  // 1, 2, or 3
+}
+
 export interface SnapshotPayload {
   tick: number;
   players: PlayerSnapshot[];
@@ -160,6 +169,7 @@ export interface SnapshotPayload {
   blocks: BlockSnapshot[];
   deathOrder: PlayerId[]; // player IDs in order of death (index 0 = first to die = last place)
   timeLeftSeconds: number; // -1 if no timer, >=0 if timer active
+  boss?: BossSnapshot;    // present in BOSS mode only
 }
 
 export type GameEventType =
@@ -172,7 +182,9 @@ export type GameEventType =
   | 'PlayerRescued'
   | 'PlayerDied'
   | 'RoundEnded'
-  | 'ServerNotice';
+  | 'ServerNotice'
+  | 'BossHit'
+  | 'BossDefeated';
 
 export interface EventMessagePayload {
   tick: number;

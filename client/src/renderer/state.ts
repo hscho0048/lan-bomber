@@ -29,6 +29,7 @@ export type GameState = {
   currentRoomName: string;
   pendingHostRoomName: string | null;
   notifications: Notification[];
+  roundEnd: { msg: string; at: number } | null;
 };
 
 export function createGameState(): GameState {
@@ -51,6 +52,7 @@ export function createGameState(): GameState {
     lastSnapArrival: 0,
     currentRoomName: 'LAN Bomber 방',
     pendingHostRoomName: null,
-    notifications: []
+    notifications: [],
+    roundEnd: null
   };
 }

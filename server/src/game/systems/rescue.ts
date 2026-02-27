@@ -21,9 +21,9 @@ export interface RescueContext {
   sendEvent: (type: GameEventType, payload: any) => void;
 }
 
-/** TEAM mode: alive teammate standing on same tile rescues a trapped player. */
+/** TEAM/BOSS mode: alive teammate standing on same tile rescues a trapped player. */
 export function checkRescues(ctx: RescueContext): void {
-  if (ctx.mode !== 'TEAM') return;
+  if (ctx.mode !== 'TEAM' && ctx.mode !== 'BOSS') return;
 
   for (const trapped of ctx.players.values()) {
     if (trapped.state !== 'Trapped') continue;
@@ -53,7 +53,8 @@ export function checkTrapDeaths(ctx: RescueContext): void {
     for (const other of ctx.players.values()) {
       if (other.id === trapped.id) continue;
       if (other.state !== 'Alive') continue;
-      if (ctx.mode === 'TEAM' && other.team === trapped.team) continue;
+      // In TEAM or BOSS mode, same-team players never kill trapped allies
+      if ((ctx.mode === 'TEAM' || ctx.mode === 'BOSS') && other.team === trapped.team) continue;
       const opos = ctx.getPlayerOccupyTile(other);
       if (opos.x === tpos.x && opos.y === tpos.y) {
         trapped.state = 'Dead';

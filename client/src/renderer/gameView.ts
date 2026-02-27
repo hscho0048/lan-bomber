@@ -1,4 +1,4 @@
-import { TICK_RATE, CHAR_COLORS, getMapPreset, type ItemType, type SnapshotPayload, type StartGamePayload, type PlayerSnapshot } from '@lan-bomber/shared';
+import { TICK_RATE, CHAR_COLORS, getMapPreset, type ItemType, type SnapshotPayload, type StartGamePayload, type PlayerSnapshot, type BossSnapshot } from '@lan-bomber/shared';
 import type { RendererElements } from './types';
 import type { Notification } from './state';
 import {
@@ -41,6 +41,7 @@ export function preloadAssets() {
   loadImg('assests/action/explode_effects/splash_center.svg');
   loadImg('assests/action/explode_effects/splash_horizontal.svg');
   loadImg('assests/action/explode_effects/splahs_vertical.svg');
+  loadImg('assests/images/boss/boss1.svg');
 }
 
 // ========================
@@ -63,6 +64,7 @@ function getWaterballSrcForPlayer(
   playerColors: Record<string, number>,
   playerSkins: Record<string, string>
 ): string {
+  if (ownerId === 'boss') return 'assests/images/waterball/waterball_red.svg';
   const skin = playerSkins[ownerId] ?? '';
   const skinIdx = SKIN_TO_WATERBALL[skin];
   const colorIndex = skinIdx !== undefined ? skinIdx : (playerColors[ownerId] ?? 0);
@@ -465,6 +467,96 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
 }
 
 // ========================
+// Boss rendering
+// ========================
+
+function drawBoss(
+  ctx: CanvasRenderingContext2D,
+  boss: BossSnapshot,
+  tileSize: number,
+  now: number
+): void {
+  const img = loadImg('assests/images/boss/boss1.svg');
+  // Footprint: 2×2 tiles at (boss.x, boss.y)
+  // Draw visually larger: 6 tiles wide × 5.5 tiles tall, bottom-aligned, centered
+  const footprintCenterX = (boss.x + 1) * tileSize;        // center of 2×2
+  const footprintBottomY = (boss.y + 2) * tileSize;         // bottom of 2×2
+  const w = tileSize * 6;
+  const h = tileSize * 5.5;
+  const bx = footprintCenterX - w / 2;
+  const by = footprintBottomY - h;
+
+  ctx.save();
+
+  // Breathing animation (more intense in phase 3)
+  const breatheAmp = boss.phase === 3 ? 0.04 : 0.015;
+  const breatheT = (now % 900) / 900;
+  const breathe = 1 + Math.sin(breatheT * Math.PI * 2) * breatheAmp;
+  const pivotX = footprintCenterX;
+  const pivotY = footprintBottomY;
+  ctx.translate(pivotX, pivotY);
+  ctx.scale(breathe, breathe);
+  ctx.translate(-pivotX, -pivotY);
+
+  // Phase 3: red tint flash
+  if (boss.phase === 3 && boss.state === 'Alive') {
+    const flashAlpha = 0.18 * Math.abs(Math.sin((now / 250) * Math.PI));
+    ctx.globalAlpha = 1;
+    if (img.complete && img.naturalWidth > 0) {
+      ctx.drawImage(img, bx, by, w, h);
+    }
+    ctx.fillStyle = `rgba(255,30,30,${flashAlpha})`;
+    ctx.fillRect(bx, by, w, h);
+  } else if (boss.state === 'Dead') {
+    ctx.globalAlpha = 0.25;
+    if (img.complete && img.naturalWidth > 0) ctx.drawImage(img, bx, by, w, h);
+  } else {
+    if (img.complete && img.naturalWidth > 0) {
+      ctx.drawImage(img, bx, by, w, h);
+    } else {
+      ctx.fillStyle = '#552222';
+      ctx.fillRect(bx, by, w, h);
+      ctx.fillStyle = '#fff';
+      ctx.font = `bold ${tileSize * 2}px ui-sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('👾', footprintCenterX, by + h / 2);
+    }
+  }
+
+  ctx.restore();
+
+  if (boss.state !== 'Alive') return;
+
+  // HP bar (above boss visual, in canvas-space after the transform-save/restore)
+  const hpBarW = tileSize * 6;
+  const hpBarH = 10;
+  const hpBarX = bx + w / 2 - hpBarW / 2;
+  const hpBarY = by - hpBarH - 22;
+
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.fillRect(hpBarX - 2, hpBarY - 2, hpBarW + 4, hpBarH + 4);
+
+  const hpRatio = Math.max(0, boss.hp / boss.maxHp);
+  const hpColor = hpRatio > 0.6 ? '#33ee44' : hpRatio > 0.3 ? '#eebb22' : '#ee3322';
+  ctx.fillStyle = hpColor;
+  ctx.fillRect(hpBarX, hpBarY, hpBarW * hpRatio, hpBarH);
+  ctx.strokeStyle = '#aaaaaa';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(hpBarX - 2, hpBarY - 2, hpBarW + 4, hpBarH + 4);
+
+  // Boss label
+  const phaseColors = ['', '#55ee88', '#eecc33', '#ff5533'];
+  ctx.save();
+  ctx.font = `bold ${Math.max(10, tileSize * 0.23)}px ui-sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+  ctx.fillStyle = phaseColors[boss.phase] ?? '#fff';
+  ctx.fillText(`👾 BOSS  Phase ${boss.phase}  HP:${boss.hp}/${boss.maxHp}`, bx + w / 2, hpBarY - 4);
+  ctx.restore();
+}
+
+// ========================
 // HUD updaters
 // ========================
 
@@ -496,7 +588,12 @@ function updateHUD(
   }
 
   // Top bar
-  if (startGame.mode === 'TEAM' && playerTeams) {
+  if (startGame.mode === 'BOSS') {
+    const alive = snap.players.filter(p => p.state !== 'Dead').length;
+    const boss = snap.boss;
+    const bossInfo = boss ? `  👾 HP:${boss.hp}/${boss.maxHp} Phase${boss.phase}` : '';
+    el.hudTop.textContent = `보스전 · 생존: ${alive}/${snap.players.length}${bossInfo}`;
+  } else if (startGame.mode === 'TEAM' && playerTeams) {
     const aAlive = snap.players.filter(p => p.state !== 'Dead' && playerTeams[p.id] === 0).length;
     const bAlive = snap.players.filter(p => p.state !== 'Dead' && playerTeams[p.id] === 1).length;
     el.hudTop.textContent = `TEAM · A팀 ${aAlive}  |  B팀 ${bAlive}`;
@@ -591,6 +688,8 @@ export type DrawOptions = {
   notifications: Notification[];
   now: number;
   playerSkins: Record<string, string>;
+  boss?: BossSnapshot;
+  roundEnd?: { msg: string; at: number } | null;
 };
 
 // ========================
@@ -601,7 +700,7 @@ export function drawGameFrame(opts: DrawOptions): void {
   const {
     ctx, el, startGame,
     snapshotCurr, snapshotPrev, snapshotInterpStart, snapshotInterpDuration,
-    serverTickEstimate, pingMs, myId, playerTeams, notifications, now, playerSkins
+    serverTickEstimate, pingMs, myId, playerTeams, notifications, now, playerSkins, boss, roundEnd
   } = opts;
 
   const preset = getMapPreset(startGame.mapId);
@@ -629,6 +728,8 @@ export function drawGameFrame(opts: DrawOptions): void {
     drawItems(ctx, snapshotCurr.items, tileSize);
     drawExplosions(ctx, snapshotCurr.explosions, tileSize);
     drawBalloons(ctx, snapshotCurr.balloons, snapshotCurr.tick, tileSize, startGame.playerColors ?? {}, playerSkins, now);
+    const bossToDraw = boss ?? snapshotCurr.boss;
+    if (bossToDraw) drawBoss(ctx, bossToDraw, tileSize, now);
     drawPlayers(ctx, snapshotCurr.players, snapshotPrev, snapshotCurr, alpha, tileSize, startGame, playerTeams, myId, snapshotCurr.tick);
   }
 
@@ -637,6 +738,37 @@ export function drawGameFrame(opts: DrawOptions): void {
   // Notifications are drawn in canvas-space (not tile-space)
   if (snapshotCurr) {
     drawNotifications(ctx, notifications, now, el.canvas.width);
+  }
+
+  // Round-end overlay: fade in over 600ms, show centered message
+  if (roundEnd) {
+    const elapsed = now - roundEnd.at;
+    const alpha = Math.min(1, elapsed / 600) * 0.72;
+    const cw = el.canvas.width;
+    const ch = el.canvas.height;
+
+    ctx.save();
+    ctx.fillStyle = `rgba(0,0,0,${alpha})`;
+    ctx.fillRect(0, 0, cw, ch);
+
+    const textAlpha = Math.min(1, Math.max(0, (elapsed - 150) / 500));
+    ctx.globalAlpha = textAlpha;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    // Shadow
+    ctx.shadowColor = 'rgba(0,0,0,0.8)';
+    ctx.shadowBlur = 24;
+    ctx.font = `bold ${Math.round(ch * 0.12)}px ui-sans-serif`;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(roundEnd.msg, cw / 2, ch / 2);
+
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = textAlpha * 0.65;
+    ctx.font = `${Math.round(ch * 0.045)}px ui-sans-serif`;
+    ctx.fillStyle = '#cccccc';
+    ctx.fillText('잠시 후 결과 화면으로 이동합니다', cw / 2, ch / 2 + Math.round(ch * 0.11));
+    ctx.restore();
   }
 
   updateHUD(el, snapshotCurr, startGame, playerTeams, serverTickEstimate, pingMs, myId);

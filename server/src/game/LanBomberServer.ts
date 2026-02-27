@@ -55,6 +55,17 @@ type Tile = 'SolidWall' | 'SoftBlock' | 'Empty';
 
 type Phase = 'lobby' | 'starting' | 'inGame' | 'postGame';
 
+interface BossEntity {
+  hp: number;
+  maxHp: number;
+  x: number;   // top-left tile X of 2×2 body
+  y: number;   // top-left tile Y of 2×2 body
+  state: 'Alive' | 'Dead';
+  phase: number; // 1, 2, or 3
+  nextMoveTick: number;
+  nextAttackTick: number;
+}
+
 interface Balloon {
   id: string;
   x: number;
@@ -208,6 +219,10 @@ export class LanBomberServer {
   private gameDurationSeconds: number = 120;
   private gameEndTick: number = 0;
   private deathOrder: string[] = []; // player IDs in order of death
+
+  // BOSS mode
+  private boss: BossEntity | null = null;
+  private bossHitByExplosion = new Set<string>(); // tracks which explosions already dealt boss damage
 
   // Color slot management
   private usedColors = new Set<number>();
@@ -429,7 +444,7 @@ export class LanBomberServer {
   }
 
   private assignTeamOnJoin(): number {
-    if (this.mode === 'FFA') return 0;
+    if (this.mode === 'FFA' || this.mode === 'BOSS') return 0;
     // TEAM: alternate teams to keep balanced
     const count = this.players.size;
     return count % 2;
@@ -479,9 +494,13 @@ export class LanBomberServer {
         if (this.phase !== 'lobby') return;
         this.mode = msg.payload.mode;
         this.log.info(`Mode set to ${this.mode}`);
-        // In FFA, force all teams to 0
-        if (this.mode === 'FFA') {
+        // In FFA and BOSS, force all teams to 0
+        if (this.mode === 'FFA' || this.mode === 'BOSS') {
           for (const p of this.players.values()) p.team = 0;
+        }
+        // Auto-set boss arena for BOSS mode
+        if (this.mode === 'BOSS' && this.mapId !== 'boss_arena') {
+          try { getMapPreset('boss_arena'); this.mapId = 'boss_arena'; } catch { /* not available */ }
         }
         this.sendRoomState();
         return;
@@ -550,8 +569,9 @@ export class LanBomberServer {
           this.sendTo(player.ws, { type: 'ServerError', payload: { message: 'Not everyone is Ready.' } });
           return;
         }
-        if (this.players.size < 2) {
-          this.sendTo(player.ws, { type: 'ServerError', payload: { message: 'Need at least 2 players.' } });
+        const minPlayers = this.mode === 'BOSS' ? 1 : 2;
+        if (this.players.size < minPlayers) {
+          this.sendTo(player.ws, { type: 'ServerError', payload: { message: `Need at least ${minPlayers} player(s).` } });
           return;
         }
         if (this.mode === 'TEAM') {
@@ -658,6 +678,8 @@ export class LanBomberServer {
     this.itemCounter = 0;
     this.deathOrder = [];
     this.gameEndTick = 0;
+    this.boss = null;
+    this.bossHitByExplosion.clear();
 
     // Reset readiness and in-game state
     for (const p of this.players.values()) {
@@ -760,6 +782,8 @@ export class LanBomberServer {
     this.balloonCounter = 0;
     this.explosionCounter = 0;
     this.itemCounter = 0;
+    this.boss = null;
+    this.bossHitByExplosion.clear();
 
     // Spawn preset items defined in the map
     if (preset.presetItems) {
@@ -770,6 +794,11 @@ export class LanBomberServer {
         }
       }
       this.log.info(`Spawned ${this.items.size} preset items.`);
+    }
+
+    // Spawn boss in BOSS mode
+    if (this.mode === 'BOSS') {
+      this.spawnBoss();
     }
 
     this.sendEvent('ServerNotice', { text: 'Game started!' });
@@ -897,11 +926,17 @@ export class LanBomberServer {
     for (const [id, ex] of this.explosions.entries()) {
       if (this.tick >= ex.endTick) {
         this.explosions.delete(id);
+        this.bossHitByExplosion.delete(id);
       }
     }
 
     // 6) Balloon explosions (including chain)
     this.processBalloonExplosions();
+
+    // 7) Boss AI (BOSS mode)
+    if (this.mode === 'BOSS') {
+      this.simulateBoss();
+    }
   }
 
   private simulateMovement(p: PlayerConn): void {
@@ -988,7 +1023,12 @@ export class LanBomberServer {
       getPlayerOccupyTile: (p) => this.getPlayerOccupyTile(p as any),
       findItemAt: (x, y) => this.findItemAt(x, y),
       rollItemType: () => this.rollItemType(),
-      random: () => this.rng.next()
+      random: () => this.rng.next(),
+      // BOSS mode: all balloons can trap players (including own); track boss HP damage
+      canTrapPlayer: undefined,
+      checkBossHit: (this.mode === 'BOSS' && this.boss?.state === 'Alive')
+        ? (tile, explosionId, ownerId) => this.applyBossHit(tile, explosionId, ownerId)
+        : undefined
     };
   }
 
@@ -1032,6 +1072,201 @@ export class LanBomberServer {
     this.sendEvent('PlayerRescued', { playerId: p.id, byPlayerId: p.id });
   }
 
+  // ========================
+  // Boss AI
+  // ========================
+
+  private spawnBoss(): void {
+    // Find the nearest valid 2×2 area to map center
+    const cx = Math.floor((this.width - 2) / 2);
+    const cy = Math.floor((this.height - 2) / 2);
+    let spawnX = cx;
+    let spawnY = cy;
+
+    // Spiral search for clear 2×2
+    outer: for (let r = 0; r <= Math.max(this.width, this.height); r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+          const tx = cx + dx;
+          const ty = cy + dy;
+          if (this.canBossOccupy(tx, ty)) { spawnX = tx; spawnY = ty; break outer; }
+        }
+      }
+    }
+
+    // Clear boss spawn area
+    for (let dy = 0; dy < 2; dy++) {
+      for (let dx = 0; dx < 2; dx++) {
+        this.grid[spawnY + dy][spawnX + dx] = 'Empty';
+      }
+    }
+
+    const maxHp = 15 + this.players.size * 5; // scales with player count
+    this.boss = {
+      hp: maxHp,
+      maxHp,
+      x: spawnX,
+      y: spawnY,
+      state: 'Alive',
+      phase: 1,
+      nextMoveTick: this.tick + 90,   // first move after 1.5s
+      nextAttackTick: this.tick + 150  // first attack after 2.5s
+    };
+    this.log.info(`Boss spawned at (${spawnX},${spawnY}) HP=${maxHp}`);
+  }
+
+  private canBossOccupy(x: number, y: number): boolean {
+    if (x < 0 || y < 0 || x + 1 >= this.width || y + 1 >= this.height) return false;
+    for (let dy = 0; dy < 2; dy++) {
+      for (let dx = 0; dx < 2; dx++) {
+        if (this.grid[y + dy][x + dx] === 'SolidWall') return false;
+      }
+    }
+    return true;
+  }
+
+  private simulateBoss(): void {
+    if (!this.boss || this.boss.state !== 'Alive') return;
+    const boss = this.boss;
+
+    // Update phase
+    const hpRatio = boss.hp / boss.maxHp;
+    boss.phase = hpRatio > 0.66 ? 1 : hpRatio > 0.33 ? 2 : 3;
+
+    // Movement
+    if (this.tick >= boss.nextMoveTick) {
+      this.moveBoss();
+      const movePeriod = boss.phase === 1 ? 75 : boss.phase === 2 ? 50 : 35;
+      boss.nextMoveTick = this.tick + movePeriod;
+    }
+
+    // Attack
+    if (this.tick >= boss.nextAttackTick) {
+      this.bossAttack();
+      const attackPeriod = boss.phase === 1 ? 180 : boss.phase === 2 ? 120 : 80;
+      boss.nextAttackTick = this.tick + attackPeriod;
+    }
+  }
+
+  private moveBoss(): void {
+    if (!this.boss || this.boss.state !== 'Alive') return;
+
+    // Find nearest alive player as target
+    let targetX = this.boss.x + 1;
+    let targetY = this.boss.y + 1;
+    let minDist = Infinity;
+    for (const p of this.players.values()) {
+      if (p.state !== 'Alive') continue;
+      const occ = this.getPlayerOccupyTile(p);
+      const dist = Math.abs(occ.x - (this.boss.x + 0.5)) + Math.abs(occ.y - (this.boss.y + 0.5));
+      if (dist < minDist) { minDist = dist; targetX = occ.x; targetY = occ.y; }
+    }
+
+    const ddx = targetX - this.boss.x;
+    const ddy = targetY - this.boss.y;
+
+    // Preferred direction (toward player), with fallbacks
+    const dirs: Array<[number, number]> = [];
+    if (Math.abs(ddx) >= Math.abs(ddy)) {
+      if (ddx !== 0) dirs.push([Math.sign(ddx), 0]);
+      if (ddy !== 0) dirs.push([0, Math.sign(ddy)]);
+    } else {
+      if (ddy !== 0) dirs.push([0, Math.sign(ddy)]);
+      if (ddx !== 0) dirs.push([Math.sign(ddx), 0]);
+    }
+    // Add all 4 directions as fallbacks
+    const allDirs: Array<[number, number]> = [[1,0],[-1,0],[0,1],[0,-1]];
+    for (const d of allDirs) {
+      if (!dirs.some(([x,y]) => x === d[0] && y === d[1])) dirs.push(d);
+    }
+
+    for (const [mx, my] of dirs) {
+      const newX = this.boss.x + mx;
+      const newY = this.boss.y + my;
+      if (this.canBossOccupy(newX, newY)) {
+        this.boss.x = newX;
+        this.boss.y = newY;
+        return;
+      }
+    }
+  }
+
+  private bossAttack(): void {
+    if (!this.boss || this.boss.state !== 'Alive') return;
+    const bx = this.boss.x;
+    const by = this.boss.y;
+    const phase = this.boss.phase;
+    const power = phase === 1 ? 3 : phase === 2 ? 4 : 5;
+    const fuseTicks = Math.round(1.8 * TICK_RATE);
+
+    // Cross pattern from boss edges
+    this.placeBossBalloon(bx - 1, by, power, fuseTicks);
+    this.placeBossBalloon(bx + 2, by, power, fuseTicks);
+    this.placeBossBalloon(bx, by - 1, power, fuseTicks);
+    this.placeBossBalloon(bx, by + 2, power, fuseTicks);
+
+    if (phase >= 2) {
+      // Diagonal corners
+      this.placeBossBalloon(bx - 1, by - 1, power, fuseTicks);
+      this.placeBossBalloon(bx + 2, by - 1, power, fuseTicks);
+      this.placeBossBalloon(bx - 1, by + 2, power, fuseTicks);
+      this.placeBossBalloon(bx + 2, by + 2, power, fuseTicks);
+    }
+
+    if (phase >= 3) {
+      // Targeted balloon toward nearest player
+      let nearestX = -1, nearestY = -1, minDist = Infinity;
+      for (const p of this.players.values()) {
+        if (p.state !== 'Alive') continue;
+        const occ = this.getPlayerOccupyTile(p);
+        const dist = Math.abs(occ.x - bx) + Math.abs(occ.y - by);
+        if (dist < minDist) { minDist = dist; nearestX = occ.x; nearestY = occ.y; }
+      }
+      if (nearestX >= 0) {
+        // Quick fuse for targeted balloon
+        this.placeBossBalloon(nearestX, nearestY, power, Math.round(1.2 * TICK_RATE));
+      }
+    }
+  }
+
+  private placeBossBalloon(x: number, y: number, power: number, fuseTicks: number): void {
+    if (x < 0 || y < 0 || x >= this.width || y >= this.height) return;
+    if (this.grid[y][x] === 'SolidWall') return;
+    if (this.balloonsByPos.has(keyXY(x, y))) return;
+
+    const id = `b${++this.balloonCounter}`;
+    const balloon: Balloon = {
+      id,
+      x, y,
+      ownerId: 'boss',
+      explodeTick: this.tick + fuseTicks,
+      power,
+      passableBy: new Set() // no one passes through boss balloons
+    };
+    this.balloons.set(id, balloon);
+    this.balloonsByPos.set(keyXY(x, y), id);
+    this.sendEvent('BalloonPlaced', { balloonId: id, ownerId: 'boss', x, y, explodeTick: balloon.explodeTick });
+  }
+
+  private applyBossHit(tile: XY, explosionId: string, ownerId: string): void {
+    if (!this.boss || this.boss.state !== 'Alive') return;
+    if (ownerId === 'boss') return; // boss immune to its own balloons
+    if (this.bossHitByExplosion.has(explosionId)) return; // one damage per explosion
+    const bx = this.boss.x;
+    const by = this.boss.y;
+    if (tile.x >= bx && tile.x <= bx + 1 && tile.y >= by && tile.y <= by + 1) {
+      this.bossHitByExplosion.add(explosionId);
+      this.boss.hp = Math.max(0, this.boss.hp - 1);
+      this.sendEvent('BossHit', { hp: this.boss.hp, maxHp: this.boss.maxHp });
+      if (this.boss.hp <= 0) {
+        this.boss.state = 'Dead';
+        this.sendEvent('BossDefeated', {});
+        this.log.info('Boss defeated!');
+      }
+    }
+  }
+
   private buildRanking(): Array<{ id: string; name: string; colorIndex: number; team: number; skin: string }> {
     // Survivors rank above dead; dead ranked in reverse death order (last to die = higher rank)
     const survivors: Array<{ id: string; name: string; colorIndex: number; team: number; skin: string }> = [];
@@ -1061,6 +1296,28 @@ export class LanBomberServer {
     if (this.phase !== 'inGame') return;
 
     const aliveOrTrapped = [...this.players.values()].filter((p) => p.state !== 'Dead');
+
+    // BOSS mode win/lose
+    if (this.mode === 'BOSS') {
+      const bossDefeated = this.boss?.state === 'Dead';
+      const allPlayersDead = aliveOrTrapped.length === 0;
+      if (bossDefeated || allPlayersDead || forceEnd) {
+        if (forceEnd && !bossDefeated) {
+          for (const p of this.players.values()) {
+            if (p.state === 'Trapped' && !this.deathOrder.includes(p.id)) {
+              this.deathOrder.push(p.id);
+            }
+          }
+        }
+        const victory = bossDefeated;
+        const ranking = this.buildRanking();
+        this.phase = 'postGame';
+        this.sendEvent('RoundEnded', { mode: 'BOSS', victory, ranking });
+        this.log.info(`Boss round ended. victory=${victory}`);
+        setTimeout(() => this.resetToLobby(), 6000);
+      }
+      return;
+    }
 
     if (this.mode === 'FFA') {
       const naturalEnd = aliveOrTrapped.length <= 1;
@@ -1167,6 +1424,15 @@ export class LanBomberServer {
         ? Math.max(0, (this.gameEndTick - this.tick) / TICK_RATE)
         : -1;
 
+    const boss = this.boss ? {
+      hp: this.boss.hp,
+      maxHp: this.boss.maxHp,
+      x: this.boss.x,
+      y: this.boss.y,
+      state: this.boss.state,
+      phase: this.boss.phase
+    } : undefined;
+
     return {
       tick: this.tick,
       players,
@@ -1175,7 +1441,8 @@ export class LanBomberServer {
       items,
       blocks,
       deathOrder: [...this.deathOrder],
-      timeLeftSeconds
+      timeLeftSeconds,
+      boss
     };
   }
 

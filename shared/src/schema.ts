@@ -33,7 +33,7 @@ function isMoveDir(v: unknown): v is MoveDir {
 }
 
 function isGameMode(v: unknown): v is GameMode {
-  return v === 'FFA' || v === 'TEAM';
+  return v === 'FFA' || v === 'TEAM' || v === 'BOSS';
 }
 
 function isNetMessage(v: unknown): v is NetMessage<string, unknown> {
@@ -113,7 +113,7 @@ export function parseClientMessage(raw: string): ClientToServerMessage | null {
     case 'SetGameDuration': {
       if (!isInt(payload.seconds)) return null;
       const secs = payload.seconds as number;
-      const valid = [30, 60, 90, 120, 150, 180, 210, 240, 270, 300];
+      const valid = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300];
       if (!valid.includes(secs)) return null;
       return { type: 'SetGameDuration', payload: { seconds: secs } };
     }

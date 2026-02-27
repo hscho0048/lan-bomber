@@ -29,6 +29,7 @@ export function renderRoomState(
   const state = roomState;
   const isHost = myId && state.hostId === myId;
   const isTeamMode = state.mode === 'TEAM';
+  const isBossMode = state.mode === 'BOSS';
 
   el.roomTitle.textContent = roomName || '방';
 
@@ -135,9 +136,9 @@ export function renderRoomState(
     el.teamCountDisplay.classList.add('hidden');
   }
 
-  // Start button: host only, all ready, >= 2 players
+  // Start button: host only, all ready; BOSS mode allows 1 player
   const allReady = state.players.length > 0 && state.players.every((p) => state.readyStates[p.id]);
-  const enoughPlayers = state.players.length >= 2;
+  const enoughPlayers = isBossMode ? state.players.length >= 1 : state.players.length >= 2;
   el.btnStart.disabled = !(isHost && allReady && enoughPlayers);
 }
 
@@ -279,11 +280,15 @@ export function renderResultScreen(
   ranking: Array<{ id: string; name: string; colorIndex: number; team?: number; skin?: string }>,
   myId: string | null,
   isDraw: boolean = false,
-  winnerTeam?: number
+  winnerTeam?: number,
+  bossVictory?: boolean
 ) {
   const isTeamMode = winnerTeam !== undefined;
+  const isBossMode = bossVictory !== undefined;
 
-  if (isTeamMode) {
+  if (isBossMode) {
+    el.resultTitle.textContent = bossVictory ? '🏆 보스 격파!' : '💀 게임 오버...';
+  } else if (isTeamMode) {
     el.resultTitle.textContent = `🏆 ${winnerTeam === 0 ? 'A팀' : 'B팀'} 승리!`;
   } else {
     el.resultTitle.textContent = isDraw ? '🤝 무승부!' : '게임 결과';
@@ -292,6 +297,43 @@ export function renderResultScreen(
 
   const isMultiPlayer = ranking.length > 1;
   const taunt = LAST_PLACE_TAUNTS[Math.floor(Math.random() * LAST_PLACE_TAUNTS.length)];
+
+  if (isBossMode) {
+    // BOSS mode: show all players (survivors = heroes, dead = casualties)
+    const header = document.createElement('div');
+    header.className = 'result-team-header';
+    header.style.color = bossVictory ? '#ffd700' : '#cc4444';
+    header.textContent = bossVictory ? '— 영웅들 —' : '— 희생자들 —';
+    el.resultList.appendChild(header);
+
+    for (const entry of ranking) {
+      const color = CHAR_COLORS[entry.colorIndex] ?? 'blue';
+      const charFolder = entry.skin || color;
+      const isMe = entry.id === myId;
+
+      const div = document.createElement('div');
+      div.className = `result-entry rank-1${bossVictory ? ' result-entry-winner' : ''}`;
+
+      const charImg = document.createElement('div');
+      charImg.className = 'result-char-img';
+      charImg.innerHTML = `<img src="assests/images/characters/${charFolder}/idle.svg" alt="${charFolder}" />`;
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'result-name';
+      nameEl.textContent = isMe ? `${entry.name} (나)` : entry.name;
+      nameEl.style.color = `var(--color-${color})`;
+
+      const labelEl = document.createElement('div');
+      labelEl.className = `result-label ${bossVictory ? 'winner' : 'loser'}`;
+      labelEl.textContent = bossVictory ? '🏆 격파' : '💀 전사';
+
+      div.appendChild(charImg);
+      div.appendChild(nameEl);
+      div.appendChild(labelEl);
+      el.resultList.appendChild(div);
+    }
+    return;
+  }
 
   if (isTeamMode) {
     // Winner team first, then loser team

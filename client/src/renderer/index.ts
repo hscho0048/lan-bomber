@@ -101,13 +101,35 @@ function onSnapshot(snap: SnapshotPayload, gs: GameState): void {
 
 function onEvent(ev: EventMessagePayload, gs: GameState): void {
   if (ev.type === 'RoundEnded') {
-    const ranking: Array<{ id: string; name: string; colorIndex: number; team?: number }> = ev.payload.ranking ?? [];
-    if (ev.payload.mode === 'TEAM') {
+    const ranking: Array<{ id: string; name: string; colorIndex: number; team?: number; skin?: string }> = ev.payload.ranking ?? [];
+
+    // Determine overlay message
+    let endMsg = '게임 종료';
+    if (ev.payload.mode === 'BOSS') {
+      endMsg = ev.payload.victory ? '보스 격파! 🎉' : '게임 오버';
+    } else if (ev.payload.mode === 'TEAM') {
+      const myTeam = gs.roomState?.players.find(p => p.id === gs.myId)?.team;
+      endMsg = myTeam !== undefined && myTeam === ev.payload.winnerTeam ? '승리! 🎉' : '패배...';
+    } else {
+      endMsg = ev.payload.winnerId === gs.myId ? '우승! 🎉' : '게임 종료';
+    }
+
+    gs.roundEnd = { msg: endMsg, at: performance.now() };
+
+    // Prepare result screen in background
+    if (ev.payload.mode === 'BOSS') {
+      renderResultScreen(el, ranking, gs.myId, false, undefined, ev.payload.victory as boolean);
+    } else if (ev.payload.mode === 'TEAM') {
       renderResultScreen(el, ranking, gs.myId, false, ev.payload.winnerTeam as number);
     } else {
       renderResultScreen(el, ranking, gs.myId, !ev.payload.winnerId);
     }
-    setScreen(el, 'result');
+
+    // Switch to result screen after a short delay
+    setTimeout(() => {
+      gs.roundEnd = null;
+      setScreen(el, 'result');
+    }, 2800);
     return;
   }
 
@@ -504,7 +526,16 @@ function bindRoomScreen(): void {
   };
 
   el.modeSelect.onchange = () => {
-    send({ type: 'SetMode', payload: { mode: el.modeSelect.value as GameMode } });
+    const mode = el.modeSelect.value as GameMode;
+    send({ type: 'SetMode', payload: { mode } });
+    // Auto-select boss arena for BOSS mode, restore map1 when switching away
+    if (mode === 'BOSS' && el.mapSelect.value !== 'boss_arena') {
+      el.mapSelect.value = 'boss_arena';
+      send({ type: 'SetMap', payload: { mapId: 'boss_arena' } });
+    } else if (mode !== 'BOSS' && el.mapSelect.value === 'boss_arena') {
+      el.mapSelect.value = 'map1';
+      send({ type: 'SetMap', payload: { mapId: 'map1' } });
+    }
   };
 
   el.mapSelect.onchange = () => {
@@ -623,7 +654,9 @@ function draw(): void {
     playerTeams,
     notifications: state.notifications,
     now,
-    playerSkins: state.startGame.playerSkins ?? {}
+    playerSkins: state.startGame.playerSkins ?? {},
+    boss: state.snap.curr?.boss,
+    roundEnd: state.roundEnd
   });
 }
 

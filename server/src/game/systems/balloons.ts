@@ -74,6 +74,11 @@ export interface BalloonContext {
   findItemAt: (x: number, y: number) => string | null;
   rollItemType: () => ItemType;
   random: () => number; // seeded RNG for determinism
+  /** BOSS mode: if set, only balloons whose ownerId passes this check can trap players. */
+  canTrapPlayer?: (ownerId: string) => boolean;
+  /** BOSS mode: called for each explosion tile so server can apply boss HP damage.
+   *  ownerId is the balloon owner — boss does not take damage from its own balloons. */
+  checkBossHit?: (tile: XY, explosionId: string, ownerId: string) => void;
 }
 
 // ========================
@@ -144,8 +149,10 @@ export function explodeBalloon(
 
   ctx.sendEvent('BalloonExploded', { balloonId: balloon.id, x: ox, y: oy, tiles });
 
-  // Apply effects: trap players, chain balloons
+  // Apply effects: trap players, chain balloons, hit boss
   for (const t of tiles) {
+    if (ctx.checkBossHit) ctx.checkBossHit(t, exId, balloon.ownerId);
+
     const itemId = ctx.findItemAt(t.x, t.y);
     if (itemId) ctx.items.delete(itemId);
 
@@ -154,6 +161,8 @@ export function explodeBalloon(
       if (ctx.tick < p.invulnUntilTick) continue;
       const occ = ctx.getPlayerOccupyTile(p);
       if (occ.x === t.x && occ.y === t.y) {
+        // In BOSS mode, only boss-owned balloons can trap players
+        if (ctx.canTrapPlayer && !ctx.canTrapPlayer(balloon.ownerId)) continue;
         p.state = 'Trapped';
         p.trappedUntilTick = ctx.tick + TRAP_DURATION_TICKS;
         p.inputDir = 'None';
