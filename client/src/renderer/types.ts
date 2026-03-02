@@ -72,5 +72,5 @@ export type RendererElements = {
 export type InputState = {
   preferredDir: MoveDir;
   placeQueued: boolean;
-  needleSlotQueued: -1 | 0 | 1 | 2;
+  itemSlotQueued: -1 | 0 | 1 | 2 | 3 | 4;
 };

@@ -77,14 +77,14 @@ export function parseClientMessage(raw: string): ClientToServerMessage | null {
       if (!isInt(payload.tick) || payload.tick < 0) return null;
       if (!isMoveDir(payload.moveDir)) return null;
       if (!isBoolean(payload.placeBalloon)) return null;
-      const useNeedleSlotRaw = payload.useNeedleSlot;
-      const useNeedleSlot =
-        useNeedleSlotRaw === undefined
+      const useItemSlotRaw = payload.useItemSlot ?? payload.useNeedleSlot;
+      const useItemSlot =
+        useItemSlotRaw === undefined
           ? -1
-          : isInt(useNeedleSlotRaw) && useNeedleSlotRaw >= -1 && useNeedleSlotRaw <= 2
-            ? useNeedleSlotRaw
+          : isInt(useItemSlotRaw) && useItemSlotRaw >= -1 && useItemSlotRaw <= 4
+            ? useItemSlotRaw
             : null;
-      if (useNeedleSlot === null) return null;
+      if (useItemSlot === null) return null;
       return {
         type: 'Input',
         payload: {
@@ -92,7 +92,7 @@ export function parseClientMessage(raw: string): ClientToServerMessage | null {
           tick: payload.tick,
           moveDir: payload.moveDir,
           placeBalloon: payload.placeBalloon,
-          useNeedleSlot: useNeedleSlot as -1 | 0 | 1 | 2
+          useItemSlot: useItemSlot as -1 | 0 | 1 | 2 | 3 | 4
         }
       };
     }

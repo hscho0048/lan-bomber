@@ -11,9 +11,13 @@ import {
   DEFAULT_STATS,
   MAX_PLAYERS,
   RESCUE_INVULN_TICKS,
+  TRAP_DURATION_TICKS,
   SNAPSHOT_INTERVAL_TICKS,
   SOFTBLOCK_FILL_PROB,
   TICK_RATE,
+  SHIELD_DURATION_TICKS,
+  SWITCH_DURATION_TICKS,
+  INVENTORY_SIZE,
   createLogger,
   getMapPreset,
   type GameMode,
@@ -113,6 +117,10 @@ interface PlayerConn {
   stats: PlayerStats;
   trappedUntilTick: number;
   invulnUntilTick: number;
+  shieldUntilTick: number;
+  switchUntilTick: number;
+  inventory: ItemType[];
+  hasGlove: boolean;
   inputDir: MoveDir;
   lastInputSeq: number;
   placeBalloonQueued: number;
@@ -129,6 +137,22 @@ interface ServerOptions {
 
 function keyXY(x: number, y: number): string {
   return `${x},${y}`;
+}
+
+function reverseDir(dir: MoveDir): MoveDir {
+  if (dir === 'Up') return 'Down';
+  if (dir === 'Down') return 'Up';
+  if (dir === 'Left') return 'Right';
+  if (dir === 'Right') return 'Left';
+  return 'None';
+}
+
+function dirToDeltaLocal(dir: MoveDir): { dx: number; dy: number } {
+  if (dir === 'Up') return { dx: 0, dy: -1 };
+  if (dir === 'Down') return { dx: 0, dy: 1 };
+  if (dir === 'Left') return { dx: -1, dy: 0 };
+  if (dir === 'Right') return { dx: 1, dy: 0 };
+  return { dx: 0, dy: 0 };
 }
 
 function getLocalIPv4(): string {
@@ -338,6 +362,10 @@ export class LanBomberServer {
         stats: { ...DEFAULT_STATS },
         trappedUntilTick: -1,
         invulnUntilTick: 0,
+        shieldUntilTick: -1,
+        switchUntilTick: -1,
+        inventory: [],
+        hasGlove: false,
         inputDir: 'None',
         lastInputSeq: -1,
         placeBalloonQueued: 0,
@@ -494,9 +522,12 @@ export class LanBomberServer {
         if (this.phase !== 'lobby') return;
         this.mode = msg.payload.mode;
         this.log.info(`Mode set to ${this.mode}`);
-        // In FFA and BOSS, force all teams to 0
+        // In FFA and BOSS, force all teams to 0; in TEAM, auto-distribute evenly
         if (this.mode === 'FFA' || this.mode === 'BOSS') {
           for (const p of this.players.values()) p.team = 0;
+        } else if (this.mode === 'TEAM') {
+          const allPlayers = Array.from(this.players.values());
+          allPlayers.forEach((p, idx) => { p.team = idx % 2; });
         }
         // Auto-set boss arena for BOSS mode
         if (this.mode === 'BOSS' && this.mapId !== 'boss_arena') {
@@ -593,8 +624,8 @@ export class LanBomberServer {
         if (msg.payload.placeBalloon) {
           player.placeBalloonQueued = Math.min(3, player.placeBalloonQueued + 1); // small cap
         }
-        if (msg.payload.useNeedleSlot >= 0) {
-          this.tryUseNeedle(player, msg.payload.useNeedleSlot);
+        if (msg.payload.useItemSlot >= 0) {
+          this.tryUseItem(player, msg.payload.useItemSlot);
         }
         return;
       }
@@ -688,6 +719,10 @@ export class LanBomberServer {
       p.stats = { ...DEFAULT_STATS };
       p.invulnUntilTick = 0;
       p.trappedUntilTick = -1;
+      p.shieldUntilTick = -1;
+      p.switchUntilTick = -1;
+      p.inventory = [];
+      p.hasGlove = false;
       p.inputDir = 'None';
       p.placeBalloonQueued = 0;
       p.lastInputSeq = -1;
@@ -760,6 +795,10 @@ export class LanBomberServer {
       p.stats = { ...DEFAULT_STATS };
       p.invulnUntilTick = this.tick + RESCUE_INVULN_TICKS; // small spawn protection
       p.trappedUntilTick = -1;
+      p.shieldUntilTick = -1;
+      p.switchUntilTick = -1;
+      p.inventory = [];
+      p.hasGlove = false;
       p.inputDir = 'None';
       p.placeBalloonQueued = 0;
       p.lastInputSeq = -1;
@@ -885,7 +924,30 @@ export class LanBomberServer {
     for (const p of this.players.values()) {
       if (p.state !== 'Alive') continue;
 
+      // Glove kick: push balloon in movement direction before moving
+      if (p.hasGlove && p.inputDir !== 'None' && !p.move.moving) {
+        const { dx, dy } = dirToDeltaLocal(p.inputDir);
+        const tx = p.move.fromX + dx;
+        const ty = p.move.fromY + dy;
+        const bid = this.balloonsByPos.get(keyXY(tx, ty));
+        if (bid) {
+          const balloon = this.balloons.get(bid);
+          if (balloon) this.kickBalloon(balloon, dx, dy, p.id);
+        }
+      }
+
+      // Switch reversal: temporarily invert inputDir during movement
+      const originalDir = p.inputDir;
+      if (this.tick < p.switchUntilTick) {
+        p.inputDir = reverseDir(p.inputDir);
+      }
+
       this.simulateMovement(p);
+
+      // Restore original inputDir so next tick can re-apply switch
+      if (this.tick < p.switchUntilTick) {
+        p.inputDir = originalDir;
+      }
 
       if (p.placeBalloonQueued > 0) {
         // Consume one placement per tick max
@@ -922,6 +984,9 @@ export class LanBomberServer {
     checkTrapDeaths(rescueCtx);
     checkTrapExpiry(rescueCtx);
 
+    // 4) Players walking into active explosion streams get trapped
+    this.checkExplosionStreamHits();
+
     // 5) Explosions expire
     for (const [id, ex] of this.explosions.entries()) {
       if (this.tick >= ex.endTick) {
@@ -936,6 +1001,26 @@ export class LanBomberServer {
     // 7) Boss AI (BOSS mode)
     if (this.mode === 'BOSS') {
       this.simulateBoss();
+    }
+  }
+
+  private checkExplosionStreamHits(): void {
+    for (const ex of this.explosions.values()) {
+      for (const t of ex.tiles) {
+        for (const p of this.players.values()) {
+          if (p.state !== 'Alive') continue;
+          if (this.tick < p.invulnUntilTick) continue;
+          if (this.tick < p.shieldUntilTick) continue; // shield protection
+          const occ = this.getPlayerOccupyTile(p);
+          if (occ.x !== t.x || occ.y !== t.y) continue;
+          p.state = 'Trapped';
+          p.trappedUntilTick = this.tick + TRAP_DURATION_TICKS;
+          p.inputDir = 'None';
+          p.placeBalloonQueued = 0;
+          p.move = { moving: false, fromX: occ.x, fromY: occ.y, toX: occ.x, toY: occ.y, dir: 'None', t: 0 };
+          this.sendEvent('PlayerTrapped', { playerId: p.id, x: t.x, y: t.y });
+        }
+      }
     }
   }
 
@@ -1049,27 +1134,83 @@ export class LanBomberServer {
   }
 
   private applyItem(p: PlayerConn, item: Item): void {
-    applyItemSystem(p, item);
+    switch (item.itemType) {
+      case 'Speed':
+      case 'Balloon':
+      case 'Power':
+        applyItemSystem(p, item);
+        break;
+      case 'Needle':
+      case 'Shield':
+        if (p.inventory.length < INVENTORY_SIZE) {
+          p.inventory.push(item.itemType);
+        }
+        break;
+      case 'Glove':
+        p.hasGlove = true;
+        break;
+      case 'Switch':
+        p.switchUntilTick = this.tick + SWITCH_DURATION_TICKS;
+        this.sendEvent('ServerNotice', { text: `${p.name}의 조작이 반전되었습니다! (15초)` });
+        break;
+    }
   }
 
-  private tryUseNeedle(p: PlayerConn, slot: number): void {
+  private tryUseItem(p: PlayerConn, slot: number): void {
     if (this.phase !== 'inGame') return;
-    if (p.state !== 'Trapped') return;
-    if (slot < 0 || slot > 2) return;
-    if (p.stats.needle <= slot) return;
-    if (p.stats.needle <= 0) return;
+    if (slot < 0 || slot >= INVENTORY_SIZE) return;
+    if (slot >= p.inventory.length) return;
 
-    p.stats.needle -= 1;
-    p.state = 'Alive';
-    p.trappedUntilTick = -1;
-    p.invulnUntilTick = this.tick + RESCUE_INVULN_TICKS;
-    p.inputDir = 'None';
-    p.placeBalloonQueued = 0;
+    const itemType = p.inventory[slot];
+    switch (itemType) {
+      case 'Needle': {
+        if (p.state !== 'Trapped') return;
+        p.inventory.splice(slot, 1);
+        p.state = 'Alive';
+        p.trappedUntilTick = -1;
+        p.invulnUntilTick = this.tick + RESCUE_INVULN_TICKS;
+        p.inputDir = 'None';
+        p.placeBalloonQueued = 0;
+        const occ = this.getPlayerOccupyTile(p);
+        p.move = { moving: false, fromX: occ.x, fromY: occ.y, toX: occ.x, toY: occ.y, dir: 'None', t: 0 };
+        this.sendEvent('PlayerRescued', { playerId: p.id, byPlayerId: p.id });
+        break;
+      }
+      case 'Shield': {
+        p.inventory.splice(slot, 1);
+        p.shieldUntilTick = this.tick + SHIELD_DURATION_TICKS;
+        break;
+      }
+    }
+  }
 
-    const occ = this.getPlayerOccupyTile(p);
-    p.move = { moving: false, fromX: occ.x, fromY: occ.y, toX: occ.x, toY: occ.y, dir: 'None', t: 0 };
+  private kickBalloon(balloon: Balloon, dx: number, dy: number, kickerId: string): void {
+    let newX = balloon.x + dx;
+    let newY = balloon.y + dy;
 
-    this.sendEvent('PlayerRescued', { playerId: p.id, byPlayerId: p.id });
+    // Advance until hitting a wall, soft block, or another balloon
+    while (
+      newX >= 0 && newY >= 0 && newX < this.width && newY < this.height &&
+      this.grid[newY][newX] !== 'SolidWall' &&
+      this.grid[newY][newX] !== 'SoftBlock' &&
+      !this.balloonsByPos.has(keyXY(newX, newY))
+    ) {
+      newX += dx;
+      newY += dy;
+    }
+    // Step back to last valid tile
+    newX -= dx;
+    newY -= dy;
+
+    if (newX === balloon.x && newY === balloon.y) return; // no movement
+
+    const fromX = balloon.x;
+    const fromY = balloon.y;
+    this.balloonsByPos.delete(keyXY(fromX, fromY));
+    balloon.x = newX;
+    balloon.y = newY;
+    this.balloonsByPos.set(keyXY(newX, newY), balloon.id);
+    this.sendEvent('BalloonKicked', { balloonId: balloon.id, fromX, fromY, x: newX, y: newY, kickerId });
   }
 
   // ========================
@@ -1382,7 +1523,11 @@ export class LanBomberServer {
         stats: p.stats,
         invulnerable: this.tick < p.invulnUntilTick,
         skin: p.skin,
-        trappedUntilTick: p.state === 'Trapped' ? p.trappedUntilTick : undefined
+        trappedUntilTick: p.state === 'Trapped' ? p.trappedUntilTick : undefined,
+        inventory: [...p.inventory],
+        hasGlove: p.hasGlove,
+        shieldUntilTick: this.tick < p.shieldUntilTick ? p.shieldUntilTick : undefined,
+        switchUntilTick: this.tick < p.switchUntilTick ? p.switchUntilTick : undefined
       };
     });
 

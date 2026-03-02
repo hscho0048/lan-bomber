@@ -549,18 +549,46 @@ h1, h2, h3 { margin: 0; font-weight: 700; }
   margin-right: 12px;
   line-height: 1;
 }
-.hud-needle-label {
-  font-size: 11px;
-  color: var(--text-secondary);
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
+
+/* 5-slot inventory HUD */
+.hud-inventory {
+  display: flex;
+  align-items: center;
+  gap: 3px;
 }
-.hud-needle-slots {
-  font-size: 22px;
+.hud-inv-slot {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid rgba(255,255,255,0.15);
+  background: rgba(0,0,0,0.35);
+}
+.hud-inv-slot--filled {
+  border-color: rgba(255,255,255,0.5);
+  background: rgba(30,50,80,0.75);
+}
+.hud-inv-slot img {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+}
+.hud-inv-key {
+  position: absolute;
+  bottom: 1px;
+  right: 2px;
+  font-size: 8px;
+  color: rgba(200,220,255,0.6);
   font-family: ui-monospace, monospace;
-  letter-spacing: 3px;
-  color: var(--text-primary);
+  line-height: 1;
+}
+.hud-glove-icon {
+  font-size: 18px;
+  margin-left: 4px;
+  line-height: 1;
 }
 
 .hud-mode {

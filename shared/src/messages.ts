@@ -9,7 +9,7 @@ export type PlayerLifeState = 'Alive' | 'Trapped' | 'Dead';
 
 export type BlockKind = 'SolidWall' | 'SoftBlock';
 
-export type ItemType = 'Speed' | 'Balloon' | 'Power' | 'Needle';
+export type ItemType = 'Speed' | 'Balloon' | 'Power' | 'Needle' | 'Glove' | 'Shield' | 'Switch';
 
 export interface XY {
   x: number;
@@ -48,7 +48,7 @@ export type InputPayload = {
   tick: number;
   moveDir: MoveDir;
   placeBalloon: boolean;
-  useNeedleSlot: -1 | 0 | 1 | 2;
+  useItemSlot: -1 | 0 | 1 | 2 | 3 | 4;
 };
 
 export type SetModePayload = { mode: GameMode };
@@ -119,6 +119,10 @@ export interface PlayerSnapshot {
   invulnerable: boolean;
   skin: string; // character skin folder name, '' = use default color
   trappedUntilTick?: number; // tick when trap expires (undefined if not trapped)
+  inventory: ItemType[];        // current inventory (Needle, Shield)
+  hasGlove: boolean;
+  shieldUntilTick?: number;     // active shield end tick, undefined if not active
+  switchUntilTick?: number;     // active switch end tick, undefined if not active
 }
 
 export interface BalloonSnapshot {
@@ -175,6 +179,7 @@ export interface SnapshotPayload {
 export type GameEventType =
   | 'BalloonPlaced'
   | 'BalloonExploded'
+  | 'BalloonKicked'
   | 'BlockDestroyed'
   | 'ItemSpawned'
   | 'ItemPicked'

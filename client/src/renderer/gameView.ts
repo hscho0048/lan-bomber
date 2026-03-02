@@ -1,6 +1,6 @@
 import { TICK_RATE, CHAR_COLORS, getMapPreset, type ItemType, type SnapshotPayload, type StartGamePayload, type PlayerSnapshot, type BossSnapshot } from '@lan-bomber/shared';
 import type { RendererElements } from './types';
-import type { Notification } from './state';
+import type { Notification, BalloonKickAnim } from './state';
 import {
   GRID_BG, GRID_LINE,
   WALL_FILL, WALL_BORDER, WALL_HIGHLIGHT,
@@ -32,12 +32,15 @@ export function preloadAssets() {
     loadImg(`assests/images/characters/${skin}/idle.svg`);
     loadImg(`assests/images/characters/${skin}/panic.svg`);
   }
-  const waterballs = ['waterball', 'waterball_green', 'waterball_purple', 'waterball_red', 'waterball_pink', 'waterball_yellow'];
+  const waterballs = ['waterball', 'waterball_green', 'waterball_purple', 'waterball_red', 'waterball_pink', 'waterball_yellow', 'waterball_black'];
   for (const w of waterballs) loadImg(`assests/images/waterball/${w}.svg`);
   loadImg('assests/images/item/item_balloon.svg');
   loadImg('assests/images/item/item_needle.svg');
   loadImg('assests/images/item/item_power.svg');
   loadImg('assests/images/item/item_speed.svg');
+  loadImg('assests/images/item/item_glove.svg');
+  loadImg('assests/images/item/item_shield.svg');
+  loadImg('assests/images/item/item_switch.svg');
   loadImg('assests/action/explode_effects/splash_center.svg');
   loadImg('assests/action/explode_effects/splash_horizontal.svg');
   loadImg('assests/action/explode_effects/splahs_vertical.svg');
@@ -64,7 +67,7 @@ function getWaterballSrcForPlayer(
   playerColors: Record<string, number>,
   playerSkins: Record<string, string>
 ): string {
-  if (ownerId === 'boss') return 'assests/images/waterball/waterball_red.svg';
+  if (ownerId === 'boss') return 'assests/images/waterball/waterball_black.svg';
   const skin = playerSkins[ownerId] ?? '';
   const skinIdx = SKIN_TO_WATERBALL[skin];
   const colorIndex = skinIdx !== undefined ? skinIdx : (playerColors[ownerId] ?? 0);
@@ -77,16 +80,14 @@ function getItemSrc(type: ItemType): string {
     case 'Balloon': return 'assests/images/item/item_balloon.svg';
     case 'Power':   return 'assests/images/item/item_power.svg';
     case 'Needle':  return 'assests/images/item/item_needle.svg';
+    case 'Glove':   return 'assests/images/item/item_glove.svg';
+    case 'Shield':  return 'assests/images/item/item_shield.svg';
+    case 'Switch':  return 'assests/images/item/item_switch.svg';
   }
 }
 
 function clamp01(n: number): number {
   return Math.max(0, Math.min(1, n));
-}
-
-function needleSlots(count: number): string {
-  const c = Math.max(0, Math.min(3, Math.floor(count)));
-  return `${c >= 1 ? '■' : '□'}${c >= 2 ? '■' : '□'}${c >= 3 ? '■' : '□'}`;
 }
 
 function formatTimer(seconds: number): string {
@@ -226,6 +227,10 @@ function balloonPhaseOffset(id: string): number {
   return (h % BREATHE_PERIOD);
 }
 
+function easeOutCubic(t: number): number {
+  return 1 - Math.pow(1 - t, 3);
+}
+
 function drawBalloons(
   ctx: CanvasRenderingContext2D,
   balloons: SnapshotPayload['balloons'],
@@ -233,21 +238,36 @@ function drawBalloons(
   tileSize: number,
   playerColors: Record<string, number>,
   playerSkins: Record<string, string>,
-  now: number
+  now: number,
+  kickAnims: Map<string, BalloonKickAnim>
 ): void {
   for (const b of balloons) {
     const img = loadImg(getWaterballSrcForPlayer(b.ownerId, playerColors, playerSkins));
     const pad = tileSize * S.BALLOON_PAD;
 
-    const t = ((now + balloonPhaseOffset(b.id)) % BREATHE_PERIOD) / BREATHE_PERIOD;
-    const factor = (1 - Math.cos(t * Math.PI * 2)) / 2; // 0→1→0 ease-in-out
+    // Kick animation: interpolate render position
+    let rx = b.x;
+    let ry = b.y;
+    const anim = kickAnims.get(b.id);
+    if (anim) {
+      const progress = (now - anim.startTime) / anim.duration;
+      if (progress >= 1) {
+        kickAnims.delete(b.id);
+      } else {
+        const ease = easeOutCubic(progress);
+        rx = anim.fromX + (anim.toX - anim.fromX) * ease;
+        ry = anim.fromY + (anim.toY - anim.fromY) * ease;
+      }
+    }
+
+    const breatheT = ((now + balloonPhaseOffset(b.id)) % BREATHE_PERIOD) / BREATHE_PERIOD;
+    const factor = (1 - Math.cos(breatheT * Math.PI * 2)) / 2;
     const scaleX = 1 + factor * 0.18;
     const scaleY = 1 - factor * 0.18;
 
-    // pivot at (50%, 90%) — bottom-centre so base stays grounded
     const size = tileSize - pad * 2;
-    const pivotX = b.x * tileSize + pad + size * 0.5;
-    const pivotY = b.y * tileSize + pad + size * 0.9;
+    const pivotX = rx * tileSize + pad + size * 0.5;
+    const pivotY = ry * tileSize + pad + size * 0.9;
 
     ctx.save();
     ctx.translate(pivotX, pivotY);
@@ -255,11 +275,11 @@ function drawBalloons(
     ctx.translate(-pivotX, -pivotY);
 
     if (img.complete && img.naturalWidth > 0) {
-      ctx.drawImage(img, b.x * tileSize + pad, b.y * tileSize + pad, size, size);
+      ctx.drawImage(img, rx * tileSize + pad, ry * tileSize + pad, size, size);
     } else {
       ctx.fillStyle = '#1b74d1';
       ctx.beginPath();
-      ctx.arc(b.x * tileSize + tileSize / 2, b.y * tileSize + tileSize / 2, tileSize * 0.33, 0, Math.PI * 2);
+      ctx.arc(rx * tileSize + tileSize / 2, ry * tileSize + tileSize / 2, tileSize * 0.33, 0, Math.PI * 2);
       ctx.fill();
     }
 
@@ -367,6 +387,24 @@ function drawPlayers(
         ctx.beginPath();
         ctx.arc(cx, cy, tileSize * S.RING_INVULN, 0, Math.PI * 2);
         ctx.stroke();
+      }
+
+      // Shield ring (golden, thicker than invuln ring)
+      if ((p as any).shieldUntilTick !== undefined) {
+        ctx.strokeStyle = 'rgba(255, 210, 50, 0.85)';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(cx, cy, tileSize * (S.RING_INVULN + 0.06), 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // Switch icon (⇄) above player name
+      if ((p as any).switchUntilTick !== undefined) {
+        ctx.fillStyle = 'rgba(120, 220, 255, 0.95)';
+        ctx.font = `bold ${Math.max(10, tileSize * 0.22)}px ui-sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText('⇄', cx, cy - tileSize * (S.NAME_Y + 0.18));
       }
 
       // Team badge
@@ -560,6 +598,23 @@ function drawBoss(
 // HUD updaters
 // ========================
 
+// DOM write caches — only update elements when their value actually changes
+let _hudTopText = '';
+let _hudTimerText = '';
+let _hudTimerClass = '';
+let _hudInventoryKey = '';
+let _hudDebugText = '';
+
+const INV_KEYS = ['z', 'x', 'c', 'v', 'b'] as const;
+
+function setTextContent(el: HTMLElement, v: string): void {
+  if (el.textContent !== v) el.textContent = v;
+}
+
+function setClassName(el: HTMLElement, v: string): void {
+  if (el.className !== v) el.className = v;
+}
+
 function updateHUD(
   el: RendererElements,
   snap: SnapshotPayload | null,
@@ -570,52 +625,79 @@ function updateHUD(
   myId: string | null
 ): void {
   // Timer
+  let timerText: string;
+  let timerClass: string;
   if (snap && snap.timeLeftSeconds >= 0) {
     const t = snap.timeLeftSeconds;
-    el.hudTimer.textContent = formatTimer(t);
-    el.hudTimer.className = 'hud-timer' + (t <= 10 ? ' danger' : t <= 30 ? ' warning' : '');
+    timerText = formatTimer(t);
+    timerClass = 'hud-timer' + (t <= 10 ? ' danger' : t <= 30 ? ' warning' : '');
   } else if (startGame.gameDurationSeconds > 0) {
-    el.hudTimer.textContent = formatTimer(startGame.gameDurationSeconds);
-    el.hudTimer.className = 'hud-timer';
+    timerText = formatTimer(startGame.gameDurationSeconds);
+    timerClass = 'hud-timer';
   } else {
-    el.hudTimer.textContent = '';
+    timerText = '';
+    timerClass = 'hud-timer';
   }
+  if (timerText !== _hudTimerText) { _hudTimerText = timerText; el.hudTimer.textContent = timerText; }
+  if (timerClass !== _hudTimerClass) { _hudTimerClass = timerClass; el.hudTimer.className = timerClass; }
 
   if (!snap) {
-    el.hudTop.textContent = `${startGame.mode} · 스냅샷 대기 중...`;
-    el.debug.textContent = `tick=${serverTick}\nping=${pingMs.toFixed(0)}ms`;
+    setTextContent(el.hudTop, `${startGame.mode} · 스냅샷 대기 중...`);
+    setTextContent(el.debug, `tick=${serverTick}\nping=${pingMs.toFixed(0)}ms`);
     return;
   }
 
-  // Top bar
+  // Top bar (changes at most every snapshot, ~20Hz)
+  let topText: string;
   if (startGame.mode === 'BOSS') {
     const alive = snap.players.filter(p => p.state !== 'Dead').length;
     const boss = snap.boss;
-    const bossInfo = boss ? `  👾 HP:${boss.hp}/${boss.maxHp} Phase${boss.phase}` : '';
-    el.hudTop.textContent = `보스전 · 생존: ${alive}/${snap.players.length}${bossInfo}`;
+    topText = `보스전 · 생존: ${alive}/${snap.players.length}` + (boss ? `  👾 HP:${boss.hp}/${boss.maxHp} Phase${boss.phase}` : '');
   } else if (startGame.mode === 'TEAM' && playerTeams) {
-    const aAlive = snap.players.filter(p => p.state !== 'Dead' && playerTeams[p.id] === 0).length;
-    const bAlive = snap.players.filter(p => p.state !== 'Dead' && playerTeams[p.id] === 1).length;
-    el.hudTop.textContent = `TEAM · A팀 ${aAlive}  |  B팀 ${bAlive}`;
+    let aAlive = 0, bAlive = 0;
+    for (const p of snap.players) {
+      if (p.state !== 'Dead') { if (playerTeams[p.id] === 0) aAlive++; else bAlive++; }
+    }
+    topText = `TEAM · A팀 ${aAlive}  |  B팀 ${bAlive}`;
   } else {
-    const alive = snap.players.filter(p => p.state !== 'Dead').length;
-    el.hudTop.textContent = `${startGame.mode} · 생존: ${alive}/${snap.players.length}`;
+    let alive = 0;
+    for (const p of snap.players) { if (p.state !== 'Dead') alive++; }
+    topText = `${startGame.mode} · 생존: ${alive}/${snap.players.length}`;
   }
+  if (topText !== _hudTopText) { _hudTopText = topText; el.hudTop.textContent = topText; }
 
-  // Needle
+  // 5-slot inventory — only rebuild HTML when inventory state changes
   const me = snap.players.find(p => p.id === myId);
   if (me && me.state !== 'Dead') {
-    el.hudNeedle.innerHTML = `<span class="hud-needle-label">바늘</span><span class="hud-needle-slots">${needleSlots(me.stats.needle)}</span>`;
-  } else {
-    el.hudNeedle.textContent = '';
+    const inv = (me as any).inventory as ItemType[] | undefined ?? [];
+    const newKey = inv.join(',') + '|' + String((me as any).hasGlove ?? false);
+    if (newKey !== _hudInventoryKey) {
+      _hudInventoryKey = newKey;
+      let html = '<div class="hud-inventory">';
+      for (let i = 0; i < 5; i++) {
+        const item = inv[i];
+        if (item) {
+          html += `<div class="hud-inv-slot hud-inv-slot--filled" title="${item}[${INV_KEYS[i]}]"><img src="${getItemSrc(item)}" alt="${item}"><span class="hud-inv-key">${INV_KEYS[i]}</span></div>`;
+        } else {
+          html += `<div class="hud-inv-slot hud-inv-slot--empty"><span class="hud-inv-key">${INV_KEYS[i]}</span></div>`;
+        }
+      }
+      if ((me as any).hasGlove) html += '<span class="hud-glove-icon" title="글러브 보유">🥊</span>';
+      html += '</div>';
+      el.hudNeedle.innerHTML = html;
+    }
+  } else if (_hudInventoryKey !== '') {
+    _hudInventoryKey = '';
+    el.hudNeedle.innerHTML = '';
   }
 
-  // Debug
-  el.debug.textContent = [
-    `tick=${snap.tick} ping=${pingMs.toFixed(0)}ms`,
-    `me=${myId?.slice(0, 8) ?? '?'} state=${me?.state ?? 'Dead'}`
-  ].join('\n');
+  // Debug (ping changes every 500ms, tick every snapshot)
+  const debugText = `tick=${snap.tick} ping=${pingMs.toFixed(0)}ms\nme=${myId?.slice(0, 8) ?? '?'} state=${me?.state ?? 'Dead'}`;
+  if (debugText !== _hudDebugText) { _hudDebugText = debugText; el.debug.textContent = debugText; }
 }
+
+// Cache: compact key of player states — rebuild HTML only when states change
+let _playerStatusKey = '';
 
 export function updatePlayerStatusPanel(
   el: RendererElements,
@@ -625,7 +707,15 @@ export function updatePlayerStatusPanel(
 ): void {
   const panel = el.playerStatusPanel;
   if (!panel) return;
-  if (!snap) { panel.innerHTML = ''; return; }
+  if (!snap) {
+    if (_playerStatusKey !== '') { _playerStatusKey = ''; panel.innerHTML = ''; }
+    return;
+  }
+
+  // Build compact state key — only player states change during a game
+  const newKey = snap.players.map(p => p.id[0] + p.state[0]).join('');
+  if (newKey === _playerStatusKey) return;
+  _playerStatusKey = newKey;
 
   const isTeam = startGame.mode === 'TEAM' && playerTeams;
   const groups: Array<{ header?: string; headerColor?: string; players: typeof snap.players }> = [];
@@ -666,7 +756,6 @@ export function updatePlayerStatusPanel(
     groupHtmlParts.push(groupHtml);
   }
   panel.innerHTML = groupHtmlParts.join('<div class="psp-team-divider"></div>');
-
 }
 
 // ========================
@@ -690,6 +779,7 @@ export type DrawOptions = {
   playerSkins: Record<string, string>;
   boss?: BossSnapshot;
   roundEnd?: { msg: string; at: number } | null;
+  balloonKickAnims: Map<string, BalloonKickAnim>;
 };
 
 // ========================
@@ -700,7 +790,8 @@ export function drawGameFrame(opts: DrawOptions): void {
   const {
     ctx, el, startGame,
     snapshotCurr, snapshotPrev, snapshotInterpStart, snapshotInterpDuration,
-    serverTickEstimate, pingMs, myId, playerTeams, notifications, now, playerSkins, boss, roundEnd
+    serverTickEstimate, pingMs, myId, playerTeams, notifications, now, playerSkins, boss, roundEnd,
+    balloonKickAnims
   } = opts;
 
   const preset = getMapPreset(startGame.mapId);
@@ -727,7 +818,7 @@ export function drawGameFrame(opts: DrawOptions): void {
     drawBlocks(ctx, snapshotCurr.blocks, tileSize);
     drawItems(ctx, snapshotCurr.items, tileSize);
     drawExplosions(ctx, snapshotCurr.explosions, tileSize);
-    drawBalloons(ctx, snapshotCurr.balloons, snapshotCurr.tick, tileSize, startGame.playerColors ?? {}, playerSkins, now);
+    drawBalloons(ctx, snapshotCurr.balloons, snapshotCurr.tick, tileSize, startGame.playerColors ?? {}, playerSkins, now, balloonKickAnims);
     const bossToDraw = boss ?? snapshotCurr.boss;
     if (bossToDraw) drawBoss(ctx, bossToDraw, tileSize, now);
     drawPlayers(ctx, snapshotCurr.players, snapshotPrev, snapshotCurr, alpha, tileSize, startGame, playerTeams, myId, snapshotCurr.tick);

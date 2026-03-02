@@ -10,7 +10,7 @@ export function createInputController() {
   const state: InputState = {
     preferredDir: 'None',
     placeQueued: false,
-    needleSlotQueued: -1
+    itemSlotQueued: -1
   };
 
   function codeToDir(code: string): MoveDir | null {
@@ -46,9 +46,11 @@ export function createInputController() {
       e.preventDefault();
     }
 
-    if (e.code === 'KeyZ') { state.needleSlotQueued = 0; e.preventDefault(); }
-    if (e.code === 'KeyX') { state.needleSlotQueued = 1; e.preventDefault(); }
-    if (e.code === 'KeyC') { state.needleSlotQueued = 2; e.preventDefault(); }
+    if (e.code === 'KeyZ') { state.itemSlotQueued = 0; e.preventDefault(); }
+    if (e.code === 'KeyX') { state.itemSlotQueued = 1; e.preventDefault(); }
+    if (e.code === 'KeyC') { state.itemSlotQueued = 2; e.preventDefault(); }
+    if (e.code === 'KeyV') { state.itemSlotQueued = 3; e.preventDefault(); }
+    if (e.code === 'KeyB') { state.itemSlotQueued = 4; e.preventDefault(); }
   };
 
   const onKeyUp = (e: KeyboardEvent) => {
@@ -72,9 +74,9 @@ export function createInputController() {
     return queued;
   };
 
-  const consumeNeedleSlotQueued = (): -1 | 0 | 1 | 2 => {
-    const slot = state.needleSlotQueued;
-    state.needleSlotQueued = -1;
+  const consumeItemSlotQueued = (): -1 | 0 | 1 | 2 | 3 | 4 => {
+    const slot = state.itemSlotQueued;
+    state.itemSlotQueued = -1;
     return slot;
   };
 
@@ -93,6 +95,6 @@ export function createInputController() {
     unbind,
     computeMoveDir,
     consumePlaceQueued,
-    consumeNeedleSlotQueued
+    consumeItemSlotQueued
   };
 }

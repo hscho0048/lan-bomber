@@ -20,25 +20,26 @@ export const TRAP_DURATION_TICKS = Math.max(1, Math.round(TRAP_DURATION_MS / TIC
 export const RESCUE_INVULN_MS = 1000;
 export const RESCUE_INVULN_TICKS = Math.max(1, Math.round(RESCUE_INVULN_MS / TICK_MS));
 
+export const SHIELD_DURATION_TICKS = Math.round(20000 / TICK_MS); // ~1200
+export const SWITCH_DURATION_TICKS = Math.round(15000 / TICK_MS); // ~900
+export const INVENTORY_SIZE = 5;
+
 export interface PlayerStats {
   speed: number; // tiles per second
   balloonCount: number;
   power: number;
-  needle: number;
 }
 
 export const DEFAULT_STATS: PlayerStats = {
   speed: 3.0,
   balloonCount: 1,
-  power: 1,
-  needle: 0
+  power: 1
 };
 
 export const STAT_CAPS: PlayerStats = {
   speed: 6.0,
   balloonCount: 6,
-  power: 6,
-  needle: 3
+  power: 6
 };
 
 export const ITEM_DROP_CHANCE = 0.35;

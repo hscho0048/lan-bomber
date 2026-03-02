@@ -5,11 +5,15 @@ function clamp(n: number, a: number, b: number): number {
 }
 
 export function rollItemType(nextRand: () => number): ItemType {
+  // Speed 18% / Balloon 18% / Power 18% / Needle 12% / Glove 13% / Shield 12% / Switch 9%
   const r = nextRand();
-  if (r < 0.25) return 'Speed';
-  if (r < 0.5) return 'Balloon';
-  if (r < 0.75) return 'Power';
-  return 'Needle';
+  if (r < 0.18) return 'Speed';
+  if (r < 0.36) return 'Balloon';
+  if (r < 0.54) return 'Power';
+  if (r < 0.66) return 'Needle';
+  if (r < 0.79) return 'Glove';
+  if (r < 0.91) return 'Shield';
+  return 'Switch';
 }
 
 export function findItemAt<T extends { x: number; y: number }>(
@@ -24,7 +28,7 @@ export function findItemAt<T extends { x: number; y: number }>(
 }
 
 export function applyItem(
-  player: { stats: { speed: number; balloonCount: number; power: number; needle: number } },
+  player: { stats: { speed: number; balloonCount: number; power: number } },
   item: { itemType: ItemType }
 ): void {
   switch (item.itemType) {
@@ -37,8 +41,6 @@ export function applyItem(
     case 'Power':
       player.stats.power = clamp(player.stats.power + 1, 1, 6);
       break;
-    case 'Needle':
-      player.stats.needle = clamp(player.stats.needle + 1, 0, 3);
-      break;
+    // Needle, Glove, Shield, Switch are handled by the server directly
   }
 }

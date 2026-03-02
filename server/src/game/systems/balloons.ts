@@ -43,6 +43,7 @@ export interface PlayerLikeForBalloon {
   id: string;
   state: PlayerLifeState;
   invulnUntilTick: number;
+  shieldUntilTick: number;
   trappedUntilTick: number;
   inputDir: MoveDir;
   placeBalloonQueued: number;
@@ -159,6 +160,7 @@ export function explodeBalloon(
     for (const p of ctx.players.values()) {
       if (p.state !== 'Alive') continue;
       if (ctx.tick < p.invulnUntilTick) continue;
+      if (ctx.tick < p.shieldUntilTick) continue; // shield protection
       const occ = ctx.getPlayerOccupyTile(p);
       if (occ.x === t.x && occ.y === t.y) {
         // In BOSS mode, only boss-owned balloons can trap players

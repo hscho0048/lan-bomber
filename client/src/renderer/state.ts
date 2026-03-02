@@ -7,6 +7,15 @@ export type Notification = {
   ttl: number; // milliseconds
 };
 
+export type BalloonKickAnim = {
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+  startTime: number;
+  duration: number; // ms
+};
+
 export type SnapState = {
   prev: SnapshotPayload | null;
   curr: SnapshotPayload | null;
@@ -30,6 +39,7 @@ export type GameState = {
   pendingHostRoomName: string | null;
   notifications: Notification[];
   roundEnd: { msg: string; at: number } | null;
+  balloonKickAnims: Map<string, BalloonKickAnim>;
 };
 
 export function createGameState(): GameState {
@@ -53,6 +63,7 @@ export function createGameState(): GameState {
     currentRoomName: 'LAN Bomber 방',
     pendingHostRoomName: null,
     notifications: [],
-    roundEnd: null
+    roundEnd: null,
+    balloonKickAnims: new Map()
   };
 }

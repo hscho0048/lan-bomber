@@ -23,7 +23,7 @@ import {
   renderResultScreen
 } from './lobbyView';
 import { createLogger } from './logger';
-import { createGameState, type GameState, type Notification } from './state';
+import { createGameState, type GameState, type Notification, type BalloonKickAnim } from './state';
 
 const el = getRendererElements();
 const ctx = el.canvas.getContext('2d')!;
@@ -133,6 +133,12 @@ function onEvent(ev: EventMessagePayload, gs: GameState): void {
     return;
   }
 
+  if (ev.type === 'BalloonKicked') {
+    const { balloonId, fromX, fromY, x, y } = ev.payload as { balloonId: string; fromX: number; fromY: number; x: number; y: number };
+    const anim: BalloonKickAnim = { fromX, fromY, toX: x, toY: y, startTime: performance.now(), duration: 220 };
+    gs.balloonKickAnims.set(balloonId, anim);
+  }
+
   if (ev.type === 'ServerNotice') {
     addSystemMessage(el, ev.payload.text ?? '');
   }
@@ -187,6 +193,7 @@ function handleServerMessage(rawData: string, gs: GameState): void {
       gs.snap.interpDuration = 1000 / SNAPSHOT_RATE;
       gs.serverTick = gs.startGame.startTick;
       gs.notifications = [];
+      gs.balloonKickAnims.clear();
       logLine('info', `StartGame: map=${gs.startGame.mapId} mode=${gs.startGame.mode} duration=${gs.startGame.gameDurationSeconds}s`);
       setScreen(el, 'game');
       break;
@@ -633,7 +640,7 @@ function draw(): void {
           tick: tickEstimate,
           moveDir: input.computeMoveDir(),
           placeBalloon: input.consumePlaceQueued(),
-          useNeedleSlot: input.consumeNeedleSlotQueued()
+          useItemSlot: input.consumeItemSlotQueued()
         }
       });
     }
@@ -669,7 +676,8 @@ function draw(): void {
     now,
     playerSkins: state.startGame.playerSkins ?? {},
     boss: state.snap.curr?.boss,
-    roundEnd: state.roundEnd
+    roundEnd: state.roundEnd,
+    balloonKickAnims: state.balloonKickAnims
   });
 }
 
