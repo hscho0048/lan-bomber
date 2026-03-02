@@ -18,6 +18,9 @@ import {
   SHIELD_DURATION_TICKS,
   SWITCH_DURATION_TICKS,
   INVENTORY_SIZE,
+  BOSS2_LASER_DURATION_TICKS,
+  BOSS2_LASER_INTERVAL_TICKS,
+  EXPLOSION_DURATION_TICKS,
   createLogger,
   getMapPreset,
   type GameMode,
@@ -68,6 +71,10 @@ interface BossEntity {
   phase: number; // 1, 2, or 3
   nextMoveTick: number;
   nextAttackTick: number;
+  skin: string;          // 'boss1' or 'boss2'
+  rageTriggered: boolean;
+  laserUntilTick: number;
+  laserNextTick: number;
 }
 
 interface Balloon {
@@ -220,6 +227,7 @@ export class LanBomberServer {
   private phase: Phase = 'lobby';
   private mode: GameMode = 'FFA';
   private mapId: string = 'map1';
+  private bossType: 'boss1' | 'boss2' | 'random' = 'random';
 
   private tick: number = 0;
   private startTick: number = 0;
@@ -247,6 +255,9 @@ export class LanBomberServer {
   // BOSS mode
   private boss: BossEntity | null = null;
   private bossHitByExplosion = new Set<string>(); // tracks which explosions already dealt boss damage
+
+  // Blocks snapshot cache (invalidated when a soft block is destroyed)
+  private cachedBlocks: Array<{ x: number; y: number; kind: BlockKind }> | null = null;
 
   // Color slot management
   private usedColors = new Set<number>();
@@ -648,6 +659,16 @@ export class LanBomberServer {
         this.sendRoomState();
         return;
       }
+      case 'SetBossType': {
+        if (player.id !== this.hostId) return;
+        if (this.phase !== 'lobby') return;
+        const bt = msg.payload.bossType;
+        if (bt === 'boss1' || bt === 'boss2' || bt === 'random') {
+          this.bossType = bt;
+          this.sendRoomState();
+        }
+        return;
+      }
       case 'Ping': {
         // Reply pong
         const pong: ServerToClientMessage = {
@@ -711,6 +732,7 @@ export class LanBomberServer {
     this.gameEndTick = 0;
     this.boss = null;
     this.bossHitByExplosion.clear();
+    this.cachedBlocks = null;
 
     // Reset readiness and in-game state
     for (const p of this.players.values()) {
@@ -823,6 +845,7 @@ export class LanBomberServer {
     this.itemCounter = 0;
     this.boss = null;
     this.bossHitByExplosion.clear();
+    this.cachedBlocks = null;
 
     // Spawn preset items defined in the map
     if (preset.presetItems) {
@@ -1243,7 +1266,11 @@ export class LanBomberServer {
       }
     }
 
-    const maxHp = 15 + this.players.size * 5; // scales with player count
+    const isBoss2 = this.bossType === 'boss2' || (this.bossType === 'random' && this.rng.next() < 0.5);
+    const skin = isBoss2 ? 'boss2' : 'boss1';
+    const maxHp = isBoss2
+      ? 8 + this.players.size * 3   // boss2: easier
+      : 15 + this.players.size * 5; // boss1: original
     this.boss = {
       hp: maxHp,
       maxHp,
@@ -1251,10 +1278,14 @@ export class LanBomberServer {
       y: spawnY,
       state: 'Alive',
       phase: 1,
-      nextMoveTick: this.tick + 90,   // first move after 1.5s
-      nextAttackTick: this.tick + 150  // first attack after 2.5s
+      nextMoveTick: this.tick + 90,
+      nextAttackTick: this.tick + 150,
+      skin,
+      rageTriggered: false,
+      laserUntilTick: -1,
+      laserNextTick: -1
     };
-    this.log.info(`Boss spawned at (${spawnX},${spawnY}) HP=${maxHp}`);
+    this.log.info(`Boss spawned at (${spawnX},${spawnY}) skin=${skin} HP=${maxHp}`);
   }
 
   private canBossOccupy(x: number, y: number): boolean {
@@ -1275,17 +1306,38 @@ export class LanBomberServer {
     const hpRatio = boss.hp / boss.maxHp;
     boss.phase = hpRatio > 0.66 ? 1 : hpRatio > 0.33 ? 2 : 3;
 
+    // Boss2: rage trigger at HP ≤ 5
+    if (boss.skin === 'boss2' && !boss.rageTriggered && boss.hp <= 5 && boss.hp > 0) {
+      boss.rageTriggered = true;
+      boss.laserUntilTick = this.tick + BOSS2_LASER_DURATION_TICKS;
+      boss.laserNextTick = this.tick;
+      this.sendEvent('ServerNotice', { text: '보스가 격노했습니다! 💢' });
+    }
+
+    // Boss2: rage laser waves — suspend normal AI during rage
+    if (boss.skin === 'boss2' && this.tick < boss.laserUntilTick) {
+      if (this.tick >= boss.laserNextTick) {
+        this.boss2RageLaser();
+        boss.laserNextTick = this.tick + BOSS2_LASER_INTERVAL_TICKS;
+      }
+      return;
+    }
+
     // Movement
     if (this.tick >= boss.nextMoveTick) {
       this.moveBoss();
-      const movePeriod = boss.phase === 1 ? 75 : boss.phase === 2 ? 50 : 35;
+      const movePeriod = boss.skin === 'boss2'
+        ? 110                                                         // boss2: slower
+        : (boss.phase === 1 ? 75 : boss.phase === 2 ? 50 : 35);    // boss1: original
       boss.nextMoveTick = this.tick + movePeriod;
     }
 
     // Attack
     if (this.tick >= boss.nextAttackTick) {
       this.bossAttack();
-      const attackPeriod = boss.phase === 1 ? 180 : boss.phase === 2 ? 120 : 80;
+      const attackPeriod = boss.skin === 'boss2'
+        ? (boss.phase === 1 ? 240 : boss.phase === 2 ? 180 : 120)  // boss2: slower
+        : (boss.phase === 1 ? 180 : boss.phase === 2 ? 120 : 80);  // boss1: original
       boss.nextAttackTick = this.tick + attackPeriod;
     }
   }
@@ -1338,6 +1390,19 @@ export class LanBomberServer {
     const bx = this.boss.x;
     const by = this.boss.y;
     const phase = this.boss.phase;
+
+    if (this.boss.skin === 'boss2') {
+      // Boss2: simple cross, lower power, longer fuse
+      const power = phase === 1 ? 2 : phase === 2 ? 3 : 4;
+      const fuseTicks = Math.round(2.2 * TICK_RATE);
+      this.placeBossBalloon(bx - 1, by,     power, fuseTicks);
+      this.placeBossBalloon(bx + 2, by,     power, fuseTicks);
+      this.placeBossBalloon(bx,     by - 1, power, fuseTicks);
+      this.placeBossBalloon(bx,     by + 2, power, fuseTicks);
+      return;
+    }
+
+    // Boss1: original attack
     const power = phase === 1 ? 3 : phase === 2 ? 4 : 5;
     const fuseTicks = Math.round(1.8 * TICK_RATE);
 
@@ -1365,8 +1430,70 @@ export class LanBomberServer {
         if (dist < minDist) { minDist = dist; nearestX = occ.x; nearestY = occ.y; }
       }
       if (nearestX >= 0) {
-        // Quick fuse for targeted balloon
         this.placeBossBalloon(nearestX, nearestY, power, Math.round(1.2 * TICK_RATE));
+      }
+    }
+  }
+
+  private boss2RageLaser(): void {
+    if (!this.boss) return;
+    const bx = this.boss.x;
+    const by = this.boss.y;
+
+    // Boss is 2×2. Fire 2-tile-wide beams from each edge to the wall.
+    // hTiles = left + right streams (horizontal SVG), vTiles = up + down streams (vertical SVG)
+    const hRaw: XY[] = [
+      ...this.computeLaserStream(bx - 1, by,     -1,  0),
+      ...this.computeLaserStream(bx - 1, by + 1, -1,  0),
+      ...this.computeLaserStream(bx + 2, by,      1,  0),
+      ...this.computeLaserStream(bx + 2, by + 1,  1,  0),
+    ];
+    const vRaw: XY[] = [
+      ...this.computeLaserStream(bx,     by - 1,  0, -1),
+      ...this.computeLaserStream(bx + 1, by - 1,  0, -1),
+      ...this.computeLaserStream(bx,     by + 2,  0,  1),
+      ...this.computeLaserStream(bx + 1, by + 2,  0,  1),
+    ];
+
+    const dedup = (arr: XY[]): XY[] => {
+      const seen = new Set<string>();
+      return arr.filter(t => { const k = `${t.x},${t.y}`; return seen.has(k) ? false : (seen.add(k), true); });
+    };
+    const hTiles = dedup(hRaw);
+    const vTiles = dedup(vRaw);
+
+    this.applyLaserHits([...hTiles, ...vTiles]);
+    const endTick = this.tick + EXPLOSION_DURATION_TICKS;
+    this.sendEvent('BossLaser', { hTiles, vTiles, endTick });
+  }
+
+  private computeLaserStream(startX: number, startY: number, dx: number, dy: number): XY[] {
+    const tiles: XY[] = [];
+    let x = startX;
+    let y = startY;
+    while (x >= 0 && x < this.width && y >= 0 && y < this.height) {
+      if (this.grid[y][x] === 'SolidWall') break;
+      tiles.push({ x, y });
+      x += dx;
+      y += dy;
+    }
+    return tiles;
+  }
+
+  private applyLaserHits(tiles: XY[]): void {
+    for (const t of tiles) {
+      for (const p of this.players.values()) {
+        if (p.state !== 'Alive') continue;
+        if (this.tick < p.invulnUntilTick) continue;
+        if (this.tick < p.shieldUntilTick) continue;
+        const occ = this.getPlayerOccupyTile(p);
+        if (occ.x !== t.x || occ.y !== t.y) continue;
+        p.state = 'Trapped';
+        p.trappedUntilTick = this.tick + TRAP_DURATION_TICKS;
+        p.inputDir = 'None';
+        p.placeBalloonQueued = 0;
+        p.move = { moving: false, fromX: occ.x, fromY: occ.y, toX: occ.x, toY: occ.y, dir: 'None', t: 0 };
+        this.sendEvent('PlayerTrapped', { playerId: p.id, x: t.x, y: t.y });
       }
     }
   }
@@ -1555,14 +1682,17 @@ export class LanBomberServer {
       itemType: it.itemType
     }));
 
-    const blocks: Array<{ x: number; y: number; kind: BlockKind }> = [];
-    for (let y = 0; y < this.height; y++) {
-      for (let x = 0; x < this.width; x++) {
-        const t = this.grid[y][x];
-        if (t === 'SolidWall') blocks.push({ x, y, kind: 'SolidWall' });
-        if (t === 'SoftBlock') blocks.push({ x, y, kind: 'SoftBlock' });
+    if (!this.cachedBlocks) {
+      this.cachedBlocks = [];
+      for (let y = 0; y < this.height; y++) {
+        for (let x = 0; x < this.width; x++) {
+          const t = this.grid[y][x];
+          if (t === 'SolidWall') this.cachedBlocks.push({ x, y, kind: 'SolidWall' });
+          if (t === 'SoftBlock') this.cachedBlocks.push({ x, y, kind: 'SoftBlock' });
+        }
       }
     }
+    const blocks = this.cachedBlocks;
 
     const timeLeftSeconds =
       this.gameEndTick > 0
@@ -1575,7 +1705,9 @@ export class LanBomberServer {
       x: this.boss.x,
       y: this.boss.y,
       state: this.boss.state,
-      phase: this.boss.phase
+      phase: this.boss.phase,
+      skin: this.boss.skin,
+      raging: this.tick < this.boss.laserUntilTick ? true : undefined
     } : undefined;
 
     return {
@@ -1604,13 +1736,15 @@ export class LanBomberServer {
       hostId: this.hostId,
       mode: this.mode,
       mapId: this.mapId,
-      gameDurationSeconds: this.gameDurationSeconds
+      gameDurationSeconds: this.gameDurationSeconds,
+      bossType: this.bossType
     };
 
     this.broadcast({ type: 'RoomState', payload });
   }
 
   private sendEvent(type: GameEventType, payload: any): void {
+    if (type === 'BlockDestroyed') this.cachedBlocks = null;
     const msg: ServerToClientMessage = {
       type: 'Event',
       payload: {

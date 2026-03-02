@@ -45,6 +45,8 @@ export type RendererElements = {
   timerSelect: HTMLSelectElement;
   modeSelect: HTMLSelectElement;
   mapSelect: HTMLSelectElement;
+  bossSelect: HTMLSelectElement;
+  bossSelectGroup: HTMLDivElement;
   btnStart: HTMLButtonElement;
   chatMessages: HTMLDivElement;
   chatInput: HTMLInputElement;

@@ -137,6 +137,11 @@ export function parseClientMessage(raw: string): ClientToServerMessage | null {
       const skin = isString(payload.skin) ? payload.skin.trim().slice(0, 32) : '';
       return { type: 'SetSkin', payload: { skin } };
     }
+    case 'SetBossType': {
+      const bt = payload.bossType;
+      if (bt !== 'boss1' && bt !== 'boss2' && bt !== 'random') return null;
+      return { type: 'SetBossType', payload: { bossType: bt } };
+    }
     default:
       return null;
   }
@@ -187,7 +192,8 @@ export function parseServerMessage(raw: string): ServerToClientMessage | null {
           hostId: payload.hostId,
           mode: payload.mode,
           mapId: payload.mapId,
-          gameDurationSeconds
+          gameDurationSeconds,
+          bossType: (payload.bossType === 'boss1' || payload.bossType === 'boss2') ? payload.bossType : 'random'
         }
       };
     }

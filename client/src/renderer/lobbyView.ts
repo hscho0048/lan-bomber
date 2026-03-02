@@ -100,6 +100,12 @@ export function renderRoomState(
     el.modeSelect.value = state.mode;
     el.mapSelect.value = state.mapId;
     el.timerSelect.value = String(state.gameDurationSeconds);
+    el.bossSelect.value = state.bossType ?? 'random';
+    if (isBossMode) {
+      el.bossSelectGroup.classList.remove('hidden');
+    } else {
+      el.bossSelectGroup.classList.add('hidden');
+    }
   } else {
     el.hostControls.classList.add('hidden');
   }

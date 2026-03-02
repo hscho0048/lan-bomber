@@ -16,6 +16,13 @@ export type BalloonKickAnim = {
   duration: number; // ms
 };
 
+export type BossLaserAnim = {
+  hTiles: { x: number; y: number }[]; // horizontal beams (left + right)
+  vTiles: { x: number; y: number }[]; // vertical beams (up + down)
+  startTimeMs: number;
+  endTimeMs: number;
+};
+
 export type SnapState = {
   prev: SnapshotPayload | null;
   curr: SnapshotPayload | null;
@@ -40,6 +47,7 @@ export type GameState = {
   notifications: Notification[];
   roundEnd: { msg: string; at: number } | null;
   balloonKickAnims: Map<string, BalloonKickAnim>;
+  bossLasers: BossLaserAnim[];
 };
 
 export function createGameState(): GameState {
@@ -64,6 +72,7 @@ export function createGameState(): GameState {
     pendingHostRoomName: null,
     notifications: [],
     roundEnd: null,
-    balloonKickAnims: new Map()
+    balloonKickAnims: new Map(),
+    bossLasers: []
   };
 }

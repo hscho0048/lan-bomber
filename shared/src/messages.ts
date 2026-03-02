@@ -60,6 +60,7 @@ export type ShuffleTeamsPayload = {};
 export type PingPayload = { clientTime: number };
 export type ChatSendPayload = { text: string };
 export type SetSkinPayload = { skin: string };
+export type SetBossTypePayload = { bossType: 'boss1' | 'boss2' | 'random' };
 
 export type ClientToServerMessage =
   | NetMessage<'JoinRoom', JoinRoomPayload>
@@ -73,7 +74,8 @@ export type ClientToServerMessage =
   | NetMessage<'ShuffleTeams', ShuffleTeamsPayload>
   | NetMessage<'ChatSend', ChatSendPayload>
   | NetMessage<'Ping', PingPayload>
-  | NetMessage<'SetSkin', SetSkinPayload>;
+  | NetMessage<'SetSkin', SetSkinPayload>
+  | NetMessage<'SetBossType', SetBossTypePayload>;
 
 // -------------------------
 // Server -> Client
@@ -94,6 +96,7 @@ export interface RoomStatePayload {
   mode: GameMode;
   mapId: string;
   gameDurationSeconds: number; // 30-300 in steps of 30
+  bossType: 'boss1' | 'boss2' | 'random'; // BOSS mode only
 }
 
 export interface StartGamePayload {
@@ -162,6 +165,8 @@ export interface BossSnapshot {
   y: number;      // top-left tile Y of 2×2 boss body
   state: 'Alive' | 'Dead';
   phase: number;  // 1, 2, or 3
+  skin: string;   // 'boss1' or 'boss2'
+  raging?: boolean; // boss2 rage mode
 }
 
 export interface SnapshotPayload {
@@ -189,7 +194,8 @@ export type GameEventType =
   | 'RoundEnded'
   | 'ServerNotice'
   | 'BossHit'
-  | 'BossDefeated';
+  | 'BossDefeated'
+  | 'BossLaser';
 
 export interface EventMessagePayload {
   tick: number;

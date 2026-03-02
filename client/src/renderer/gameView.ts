@@ -1,6 +1,6 @@
 import { TICK_RATE, CHAR_COLORS, getMapPreset, type ItemType, type SnapshotPayload, type StartGamePayload, type PlayerSnapshot, type BossSnapshot } from '@lan-bomber/shared';
 import type { RendererElements } from './types';
-import type { Notification, BalloonKickAnim } from './state';
+import type { Notification, BalloonKickAnim, BossLaserAnim } from './state';
 import {
   GRID_BG, GRID_LINE,
   WALL_FILL, WALL_BORDER, WALL_HIGHLIGHT,
@@ -16,6 +16,41 @@ import {
 
 type ImageCache = Map<string, HTMLImageElement>;
 const imageCache: ImageCache = new Map();
+
+// ========================
+// Offscreen block canvas cache
+// ========================
+
+let blockOffscreen: HTMLCanvasElement | null = null;
+let blockOffscreenKey = '';
+
+export function invalidateBlockCache(): void {
+  blockOffscreenKey = '';
+}
+
+// ========================
+// SVG raster cache
+// Converts SVG HTMLImageElements to pre-rasterized OffscreenCanvases so
+// ctx.drawImage becomes a fast bitmap blit instead of re-rasterizing SVG each frame.
+// ========================
+
+const rasterCache = new Map<string, HTMLCanvasElement>();
+
+function getRaster(src: string, w: number, h: number): HTMLCanvasElement | null {
+  const iw = Math.max(1, Math.round(w));
+  const ih = Math.max(1, Math.round(h));
+  const key = `${src}|${iw}|${ih}`;
+  const cached = rasterCache.get(key);
+  if (cached) return cached;
+  const img = imageCache.get(src);
+  if (!img || !img.complete || img.naturalWidth === 0) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = iw;
+  canvas.height = ih;
+  canvas.getContext('2d')!.drawImage(img, 0, 0, iw, ih);
+  rasterCache.set(key, canvas);
+  return canvas;
+}
 
 function loadImg(src: string): HTMLImageElement {
   if (imageCache.has(src)) return imageCache.get(src)!;
@@ -45,6 +80,7 @@ export function preloadAssets() {
   loadImg('assests/action/explode_effects/splash_horizontal.svg');
   loadImg('assests/action/explode_effects/splahs_vertical.svg');
   loadImg('assests/images/boss/boss1.svg');
+  loadImg('assests/images/boss/boss2.svg');
 }
 
 // ========================
@@ -158,10 +194,12 @@ function drawBlocks(ctx: CanvasRenderingContext2D, blocks: SnapshotPayload['bloc
 
 function drawItems(ctx: CanvasRenderingContext2D, items: SnapshotPayload['items'], tileSize: number): void {
   for (const it of items) {
-    const img = loadImg(getItemSrc(it.itemType));
+    const src = getItemSrc(it.itemType);
     const pad = tileSize * S.ITEM_PAD;
-    if (img.complete && img.naturalWidth > 0) {
-      ctx.drawImage(img, it.x * tileSize + pad, it.y * tileSize + pad, tileSize - pad * 2, tileSize - pad * 2);
+    const sz = tileSize - pad * 2;
+    const bmp = getRaster(src, sz, sz);
+    if (bmp) {
+      ctx.drawImage(bmp, it.x * tileSize + pad, it.y * tileSize + pad, sz, sz);
     } else {
       ctx.fillStyle = '#1f7a5a';
       ctx.beginPath();
@@ -172,10 +210,22 @@ function drawItems(ctx: CanvasRenderingContext2D, items: SnapshotPayload['items'
 }
 
 function drawExplosions(ctx: CanvasRenderingContext2D, explosions: SnapshotPayload['explosions'], tileSize: number): void {
-  const centerImg     = loadImg('assests/action/explode_effects/splash_center.svg');
-  const horizontalImg = loadImg('assests/action/explode_effects/splash_horizontal.svg');
-  const verticalImg   = loadImg('assests/action/explode_effects/splahs_vertical.svg');
+  const centerSrc     = 'assests/action/explode_effects/splash_center.svg';
+  const horizontalSrc = 'assests/action/explode_effects/splash_horizontal.svg';
+  const verticalSrc   = 'assests/action/explode_effects/splahs_vertical.svg';
   const dirs = ['right', 'down', 'left', 'up'] as const;
+
+  // horizontal SVG 40×28, vertical SVG 28×40 — preserve natural aspect ratio, center on tile
+  const short = tileSize * (28 / 40);
+  const horizW = tileSize, horizH = short;
+  const vertW  = short,    vertH  = tileSize;
+  const horizOffY = (tileSize - short) / 2;
+  const vertOffX  = (tileSize - short) / 2;
+
+  // Pre-fetch rasterized bitmaps once per call (cached per tileSize)
+  const centerBmp = getRaster(centerSrc, tileSize, tileSize);
+  const horizBmp  = getRaster(horizontalSrc, horizW, horizH);
+  const vertBmp   = getRaster(verticalSrc, vertW, vertH);
 
   for (const ex of explosions) {
     const dirTiles = new Map<string, Array<{ x: number; y: number }>>();
@@ -188,8 +238,9 @@ function drawExplosions(ctx: CanvasRenderingContext2D, explosions: SnapshotPaylo
       dirTiles.get(dir)!.push({ x: t.x, y: t.y });
     }
 
-    if (centerImg.complete && centerImg.naturalWidth > 0) {
-      ctx.drawImage(centerImg, ex.originX * tileSize, ex.originY * tileSize, tileSize, tileSize);
+    // Center tile
+    if (centerBmp) {
+      ctx.drawImage(centerBmp, ex.originX * tileSize, ex.originY * tileSize, tileSize, tileSize);
     } else {
       ctx.fillStyle = 'rgba(0,150,255,0.5)';
       ctx.fillRect(ex.originX * tileSize, ex.originY * tileSize, tileSize, tileSize);
@@ -199,16 +250,14 @@ function drawExplosions(ctx: CanvasRenderingContext2D, explosions: SnapshotPaylo
       const tiles = dirTiles.get(dir);
       if (!tiles || tiles.length === 0) continue;
       const isHoriz = dir === 'left' || dir === 'right';
-      const img = isHoriz ? horizontalImg : verticalImg;
-      // horizontal SVG 40×28, vertical SVG 28×40 — preserve natural aspect ratio, center on tile
-      const short = tileSize * (28 / 40); // 70% of tile
-      const drawW = isHoriz ? tileSize : short;
-      const drawH = isHoriz ? short    : tileSize;
-      const offX  = isHoriz ? 0                    : (tileSize - short) / 2;
-      const offY  = isHoriz ? (tileSize - short) / 2 : 0;
+      const bmp = isHoriz ? horizBmp : vertBmp;
+      const drawW  = isHoriz ? horizW : vertW;
+      const drawH  = isHoriz ? horizH : vertH;
+      const offX   = isHoriz ? 0         : vertOffX;
+      const offY   = isHoriz ? horizOffY : 0;
       for (const t of tiles) {
-        if (img.complete && img.naturalWidth > 0) {
-          ctx.drawImage(img, t.x * tileSize + offX, t.y * tileSize + offY, drawW, drawH);
+        if (bmp) {
+          ctx.drawImage(bmp, t.x * tileSize + offX, t.y * tileSize + offY, drawW, drawH);
         } else {
           ctx.fillStyle = 'rgba(0,150,255,0.4)';
           ctx.fillRect(t.x * tileSize, t.y * tileSize, tileSize, tileSize);
@@ -242,7 +291,7 @@ function drawBalloons(
   kickAnims: Map<string, BalloonKickAnim>
 ): void {
   for (const b of balloons) {
-    const img = loadImg(getWaterballSrcForPlayer(b.ownerId, playerColors, playerSkins));
+    const balloonSrc = getWaterballSrcForPlayer(b.ownerId, playerColors, playerSkins);
     const pad = tileSize * S.BALLOON_PAD;
 
     // Kick animation: interpolate render position
@@ -274,8 +323,9 @@ function drawBalloons(
     ctx.scale(scaleX, scaleY);
     ctx.translate(-pivotX, -pivotY);
 
-    if (img.complete && img.naturalWidth > 0) {
-      ctx.drawImage(img, rx * tileSize + pad, ry * tileSize + pad, size, size);
+    const balloonBmp = getRaster(balloonSrc, size, size);
+    if (balloonBmp) {
+      ctx.drawImage(balloonBmp, rx * tileSize + pad, ry * tileSize + pad, size, size);
     } else {
       ctx.fillStyle = '#1b74d1';
       ctx.beginPath();
@@ -341,11 +391,12 @@ function drawPlayers(
     const colorName = CHAR_COLORS[colorIndex] ?? 'blue';
     const skinName = p.skin || colorName;
 
+    const spriteSize = tileSize * S.SPRITE * 2;
     if (p.state === 'Dead') {
       ctx.globalAlpha = 0.4;
-      const imgDead = loadImg(`assests/images/characters/${skinName}/idle.svg`);
-      if (imgDead.complete && imgDead.naturalWidth > 0) {
-        ctx.drawImage(imgDead, cx - tileSize * S.SPRITE, cy - tileSize * S.SPRITE, tileSize * S.SPRITE * 2, tileSize * S.SPRITE * 2);
+      const bmpDead = getRaster(`assests/images/characters/${skinName}/idle.svg`, spriteSize, spriteSize);
+      if (bmpDead) {
+        ctx.drawImage(bmpDead, cx - tileSize * S.SPRITE, cy - tileSize * S.SPRITE, spriteSize, spriteSize);
       }
       ctx.globalAlpha = 1;
       ctx.strokeStyle = '#cc2222';
@@ -357,12 +408,12 @@ function drawPlayers(
       ctx.lineTo(cx - tileSize * 0.25, cy + tileSize * 0.25);
       ctx.stroke();
     } else {
-      const imgSrc = p.state === 'Trapped'
+      const charSrc = p.state === 'Trapped'
         ? `assests/images/characters/${skinName}/panic.svg`
         : `assests/images/characters/${skinName}/idle.svg`;
-      const img = loadImg(imgSrc);
-      if (img.complete && img.naturalWidth > 0) {
-        ctx.drawImage(img, cx - tileSize * S.SPRITE, cy - tileSize * S.SPRITE, tileSize * S.SPRITE * 2, tileSize * S.SPRITE * 2);
+      const charBmp = getRaster(charSrc, spriteSize, spriteSize);
+      if (charBmp) {
+        ctx.drawImage(charBmp, cx - tileSize * S.SPRITE, cy - tileSize * S.SPRITE, spriteSize, spriteSize);
       } else {
         ctx.fillStyle = PLAYER_FALLBACK[colorIndex] ?? PLAYER_FALLBACK[0];
         ctx.beginPath();
@@ -514,11 +565,12 @@ function drawBoss(
   tileSize: number,
   now: number
 ): void {
-  const img = loadImg('assests/images/boss/boss1.svg');
+  const skinName = boss.skin ?? 'boss1';
+  const bossSrc = `assests/images/boss/${skinName}.svg`;
   // Footprint: 2×2 tiles at (boss.x, boss.y)
   // Draw visually larger: 6 tiles wide × 5.5 tiles tall, bottom-aligned, centered
-  const footprintCenterX = (boss.x + 1) * tileSize;        // center of 2×2
-  const footprintBottomY = (boss.y + 2) * tileSize;         // bottom of 2×2
+  const footprintCenterX = (boss.x + 1) * tileSize;
+  const footprintBottomY = (boss.y + 2) * tileSize;
   const w = tileSize * 6;
   const h = tileSize * 5.5;
   const bx = footprintCenterX - w / 2;
@@ -526,8 +578,8 @@ function drawBoss(
 
   ctx.save();
 
-  // Breathing animation (more intense in phase 3)
-  const breatheAmp = boss.phase === 3 ? 0.04 : 0.015;
+  // Breathing animation (more intense in phase 3 or rage)
+  const breatheAmp = (boss.phase === 3 || boss.raging) ? 0.06 : 0.015;
   const breatheT = (now % 900) / 900;
   const breathe = 1 + Math.sin(breatheT * Math.PI * 2) * breatheAmp;
   const pivotX = footprintCenterX;
@@ -536,21 +588,23 @@ function drawBoss(
   ctx.scale(breathe, breathe);
   ctx.translate(-pivotX, -pivotY);
 
-  // Phase 3: red tint flash
-  if (boss.phase === 3 && boss.state === 'Alive') {
+  const bossBmp = getRaster(bossSrc, Math.round(w), Math.round(h));
+  if (boss.state === 'Dead') {
+    ctx.globalAlpha = 0.25;
+    if (bossBmp) ctx.drawImage(bossBmp, bx, by, w, h);
+  } else if (boss.raging) {
+    const flashAlpha = 0.35 * Math.abs(Math.sin((now / 150) * Math.PI));
+    if (bossBmp) ctx.drawImage(bossBmp, bx, by, w, h);
+    ctx.fillStyle = `rgba(255,0,0,${flashAlpha})`;
+    ctx.fillRect(bx, by, w, h);
+  } else if (boss.phase === 3 && boss.state === 'Alive') {
     const flashAlpha = 0.18 * Math.abs(Math.sin((now / 250) * Math.PI));
-    ctx.globalAlpha = 1;
-    if (img.complete && img.naturalWidth > 0) {
-      ctx.drawImage(img, bx, by, w, h);
-    }
+    if (bossBmp) ctx.drawImage(bossBmp, bx, by, w, h);
     ctx.fillStyle = `rgba(255,30,30,${flashAlpha})`;
     ctx.fillRect(bx, by, w, h);
-  } else if (boss.state === 'Dead') {
-    ctx.globalAlpha = 0.25;
-    if (img.complete && img.naturalWidth > 0) ctx.drawImage(img, bx, by, w, h);
   } else {
-    if (img.complete && img.naturalWidth > 0) {
-      ctx.drawImage(img, bx, by, w, h);
+    if (bossBmp) {
+      ctx.drawImage(bossBmp, bx, by, w, h);
     } else {
       ctx.fillStyle = '#552222';
       ctx.fillRect(bx, by, w, h);
@@ -566,7 +620,7 @@ function drawBoss(
 
   if (boss.state !== 'Alive') return;
 
-  // HP bar (above boss visual, in canvas-space after the transform-save/restore)
+  // HP bar
   const hpBarW = tileSize * 6;
   const hpBarH = 10;
   const hpBarX = bx + w / 2 - hpBarW / 2;
@@ -576,7 +630,7 @@ function drawBoss(
   ctx.fillRect(hpBarX - 2, hpBarY - 2, hpBarW + 4, hpBarH + 4);
 
   const hpRatio = Math.max(0, boss.hp / boss.maxHp);
-  const hpColor = hpRatio > 0.6 ? '#33ee44' : hpRatio > 0.3 ? '#eebb22' : '#ee3322';
+  const hpColor = boss.raging ? '#ff2200' : (hpRatio > 0.6 ? '#33ee44' : hpRatio > 0.3 ? '#eebb22' : '#ee3322');
   ctx.fillStyle = hpColor;
   ctx.fillRect(hpBarX, hpBarY, hpBarW * hpRatio, hpBarH);
   ctx.strokeStyle = '#aaaaaa';
@@ -589,9 +643,58 @@ function drawBoss(
   ctx.font = `bold ${Math.max(10, tileSize * 0.23)}px ui-sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'bottom';
-  ctx.fillStyle = phaseColors[boss.phase] ?? '#fff';
-  ctx.fillText(`👾 BOSS  Phase ${boss.phase}  HP:${boss.hp}/${boss.maxHp}`, bx + w / 2, hpBarY - 4);
+  ctx.fillStyle = boss.raging ? '#ff4400' : (phaseColors[boss.phase] ?? '#fff');
+  const rageLabel = boss.raging ? '  💢RAGE!' : '';
+  ctx.fillText(`👾 BOSS  Phase ${boss.phase}  HP:${boss.hp}/${boss.maxHp}${rageLabel}`, bx + w / 2, hpBarY - 4);
   ctx.restore();
+}
+
+// ========================
+// Boss laser stream rendering
+// ========================
+
+function drawBossLasers(
+  ctx: CanvasRenderingContext2D,
+  lasers: BossLaserAnim[],
+  tileSize: number,
+  now: number
+): void {
+  const horizontalSrc = 'assests/action/explode_effects/splash_horizontal.svg';
+  const verticalSrc   = 'assests/action/explode_effects/splahs_vertical.svg';
+
+  // Match drawExplosions sizing: horizontal SVG 40×28, vertical SVG 28×40
+  const short    = tileSize * (28 / 40);
+  const horizW   = tileSize; const horizH = short;
+  const vertW    = short;    const vertH  = tileSize;
+  const horizOffY = (tileSize - short) / 2;
+  const vertOffX  = (tileSize - short) / 2;
+
+  const horizBmp = getRaster(horizontalSrc, horizW, horizH);
+  const vertBmp  = getRaster(verticalSrc,   vertW,  vertH);
+
+  for (const laser of lasers) {
+    const progress = (now - laser.startTimeMs) / (laser.endTimeMs - laser.startTimeMs);
+    const alpha = Math.max(0, 1 - progress);
+    if (alpha <= 0) continue;
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+
+    for (const t of laser.hTiles) {
+      const px = t.x * tileSize;
+      const py = t.y * tileSize;
+      if (horizBmp) ctx.drawImage(horizBmp, px, py + horizOffY, horizW, horizH);
+      else { ctx.fillStyle = 'rgba(0,120,255,0.6)'; ctx.fillRect(px, py, tileSize, tileSize); }
+    }
+    for (const t of laser.vTiles) {
+      const px = t.x * tileSize;
+      const py = t.y * tileSize;
+      if (vertBmp) ctx.drawImage(vertBmp, px + vertOffX, py, vertW, vertH);
+      else { ctx.fillStyle = 'rgba(0,120,255,0.6)'; ctx.fillRect(px, py, tileSize, tileSize); }
+    }
+
+    ctx.restore();
+  }
 }
 
 // ========================
@@ -780,6 +883,7 @@ export type DrawOptions = {
   boss?: BossSnapshot;
   roundEnd?: { msg: string; at: number } | null;
   balloonKickAnims: Map<string, BalloonKickAnim>;
+  bossLasers?: BossLaserAnim[];
 };
 
 // ========================
@@ -791,7 +895,7 @@ export function drawGameFrame(opts: DrawOptions): void {
     ctx, el, startGame,
     snapshotCurr, snapshotPrev, snapshotInterpStart, snapshotInterpDuration,
     serverTickEstimate, pingMs, myId, playerTeams, notifications, now, playerSkins, boss, roundEnd,
-    balloonKickAnims
+    balloonKickAnims, bossLasers
   } = opts;
 
   const preset = getMapPreset(startGame.mapId);
@@ -815,9 +919,20 @@ export function drawGameFrame(opts: DrawOptions): void {
   drawBackground(ctx, mapW, mapH, tileSize);
 
   if (snapshotCurr) {
-    drawBlocks(ctx, snapshotCurr.blocks, tileSize);
+    // Blocks: render to offscreen canvas once, blit every frame
+    const blockKey = `${snapshotCurr.blocks.length}|${mapW}|${mapH}|${tileSize}`;
+    if (blockKey !== blockOffscreenKey || !blockOffscreen) {
+      blockOffscreenKey = blockKey;
+      blockOffscreen = document.createElement('canvas');
+      blockOffscreen.width = mapW * tileSize;
+      blockOffscreen.height = mapH * tileSize;
+      const bCtx = blockOffscreen.getContext('2d')!;
+      drawBlocks(bCtx, snapshotCurr.blocks, tileSize);
+    }
+    ctx.drawImage(blockOffscreen, 0, 0);
     drawItems(ctx, snapshotCurr.items, tileSize);
     drawExplosions(ctx, snapshotCurr.explosions, tileSize);
+    if (bossLasers && bossLasers.length > 0) drawBossLasers(ctx, bossLasers, tileSize, now);
     drawBalloons(ctx, snapshotCurr.balloons, snapshotCurr.tick, tileSize, startGame.playerColors ?? {}, playerSkins, now, balloonKickAnims);
     const bossToDraw = boss ?? snapshotCurr.boss;
     if (bossToDraw) drawBoss(ctx, bossToDraw, tileSize, now);

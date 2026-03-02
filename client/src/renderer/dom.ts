@@ -53,6 +53,8 @@ export function getRendererElements(): RendererElements {
     timerSelect: mustGet<HTMLSelectElement>('timerSelect'),
     modeSelect: mustGet<HTMLSelectElement>('modeSelect'),
     mapSelect: mustGet<HTMLSelectElement>('mapSelect'),
+    bossSelect: mustGet<HTMLSelectElement>('bossSelect'),
+    bossSelectGroup: mustGet<HTMLDivElement>('bossSelectGroup'),
     btnStart: mustGet<HTMLButtonElement>('btnStart'),
     chatMessages: mustGet<HTMLDivElement>('chatMessages'),
     chatInput: mustGet<HTMLInputElement>('chatInput'),

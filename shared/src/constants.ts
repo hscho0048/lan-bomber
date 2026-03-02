@@ -24,6 +24,9 @@ export const SHIELD_DURATION_TICKS = Math.round(20000 / TICK_MS); // ~1200
 export const SWITCH_DURATION_TICKS = Math.round(15000 / TICK_MS); // ~900
 export const INVENTORY_SIZE = 5;
 
+export const BOSS2_LASER_DURATION_TICKS = Math.round(2000 / TICK_MS); // ~120 ticks = 2s
+export const BOSS2_LASER_INTERVAL_TICKS = 36; // fire a wave every 36 ticks; >EXPLOSION_DURATION_TICKS so waves never overlap
+
 export interface PlayerStats {
   speed: number; // tiles per second
   balloonCount: number;

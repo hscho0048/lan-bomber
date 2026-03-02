@@ -23,7 +23,7 @@ import {
   renderResultScreen
 } from './lobbyView';
 import { createLogger } from './logger';
-import { createGameState, type GameState, type Notification, type BalloonKickAnim } from './state';
+import { createGameState, type GameState, type Notification, type BalloonKickAnim, type BossLaserAnim } from './state';
 
 const el = getRendererElements();
 const ctx = el.canvas.getContext('2d')!;
@@ -139,6 +139,22 @@ function onEvent(ev: EventMessagePayload, gs: GameState): void {
     gs.balloonKickAnims.set(balloonId, anim);
   }
 
+  if (ev.type === 'BossLaser') {
+    const hTiles: { x: number; y: number }[] = ev.payload.hTiles ?? [];
+    const vTiles: { x: number; y: number }[] = ev.payload.vTiles ?? [];
+    const endTick: number = ev.payload.endTick ?? ev.tick;
+    const ticksLeft = Math.max(0, endTick - ev.tick);
+    const now = performance.now();
+    const laser: BossLaserAnim = {
+      hTiles,
+      vTiles,
+      startTimeMs: now,
+      endTimeMs: now + ticksLeft * TICK_MS
+    };
+    gs.bossLasers.push(laser);
+    if (gs.bossLasers.length > 20) gs.bossLasers.shift();
+  }
+
   if (ev.type === 'ServerNotice') {
     addSystemMessage(el, ev.payload.text ?? '');
   }
@@ -194,6 +210,7 @@ function handleServerMessage(rawData: string, gs: GameState): void {
       gs.serverTick = gs.startGame.startTick;
       gs.notifications = [];
       gs.balloonKickAnims.clear();
+      gs.bossLasers = [];
       logLine('info', `StartGame: map=${gs.startGame.mapId} mode=${gs.startGame.mode} duration=${gs.startGame.gameDurationSeconds}s`);
       setScreen(el, 'game');
       break;
@@ -553,6 +570,11 @@ function bindRoomScreen(): void {
     const mode = el.modeSelect.value as GameMode;
     send({ type: 'SetMode', payload: { mode } });
     syncMapOptions(mode);
+    el.bossSelectGroup.classList.toggle('hidden', mode !== 'BOSS');
+  };
+
+  el.bossSelect.onchange = () => {
+    send({ type: 'SetBossType', payload: { bossType: el.bossSelect.value as 'boss1' | 'boss2' | 'random' } });
   };
 
   // Apply on initial render
@@ -657,8 +679,9 @@ function draw(): void {
 
   const playerTeams = state.startGame.mode === 'TEAM' ? buildPlayerTeams(state) : undefined;
 
-  // Prune expired notifications
+  // Prune expired notifications and lasers
   state.notifications = state.notifications.filter(n => now - n.createdAt < n.ttl);
+  state.bossLasers = state.bossLasers.filter(l => now < l.endTimeMs);
 
   drawGameFrame({
     ctx,
@@ -677,7 +700,8 @@ function draw(): void {
     playerSkins: state.startGame.playerSkins ?? {},
     boss: state.snap.curr?.boss,
     roundEnd: state.roundEnd,
-    balloonKickAnims: state.balloonKickAnims
+    balloonKickAnims: state.balloonKickAnims,
+    bossLasers: state.bossLasers
   });
 }
 
