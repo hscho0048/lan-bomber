@@ -21,6 +21,7 @@ import {
   BOSS2_LASER_DURATION_TICKS,
   BOSS2_LASER_INTERVAL_TICKS,
   EXPLOSION_DURATION_TICKS,
+  ITEM_DROP_CHANCE,
   createLogger,
   getMapPreset,
   type GameMode,
@@ -1440,19 +1441,27 @@ export class LanBomberServer {
     const bx = this.boss.x;
     const by = this.boss.y;
 
-    // Boss is 2×2. Fire 2-tile-wide beams from each edge to the wall.
+    // Boss is 2×2. Fire 4-tile-wide beams (boss body ±1) from each edge to the wall.
     // hTiles = left + right streams (horizontal SVG), vTiles = up + down streams (vertical SVG)
     const hRaw: XY[] = [
+      ...this.computeLaserStream(bx - 1, by - 1, -1,  0),
       ...this.computeLaserStream(bx - 1, by,     -1,  0),
       ...this.computeLaserStream(bx - 1, by + 1, -1,  0),
+      ...this.computeLaserStream(bx - 1, by + 2, -1,  0),
+      ...this.computeLaserStream(bx + 2, by - 1,  1,  0),
       ...this.computeLaserStream(bx + 2, by,      1,  0),
       ...this.computeLaserStream(bx + 2, by + 1,  1,  0),
+      ...this.computeLaserStream(bx + 2, by + 2,  1,  0),
     ];
     const vRaw: XY[] = [
+      ...this.computeLaserStream(bx - 1, by - 1,  0, -1),
       ...this.computeLaserStream(bx,     by - 1,  0, -1),
       ...this.computeLaserStream(bx + 1, by - 1,  0, -1),
+      ...this.computeLaserStream(bx + 2, by - 1,  0, -1),
+      ...this.computeLaserStream(bx - 1, by + 2,  0,  1),
       ...this.computeLaserStream(bx,     by + 2,  0,  1),
       ...this.computeLaserStream(bx + 1, by + 2,  0,  1),
+      ...this.computeLaserStream(bx + 2, by + 2,  0,  1),
     ];
 
     const dedup = (arr: XY[]): XY[] => {
@@ -1472,7 +1481,6 @@ export class LanBomberServer {
     let x = startX;
     let y = startY;
     while (x >= 0 && x < this.width && y >= 0 && y < this.height) {
-      if (this.grid[y][x] === 'SolidWall') break;
       tiles.push({ x, y });
       x += dx;
       y += dy;
@@ -1482,6 +1490,19 @@ export class LanBomberServer {
 
   private applyLaserHits(tiles: XY[]): void {
     for (const t of tiles) {
+      // Destroy soft blocks
+      if (this.grid[t.y]?.[t.x] === 'SoftBlock') {
+        this.grid[t.y][t.x] = 'Empty';
+        this.sendEvent('BlockDestroyed', { x: t.x, y: t.y });
+        if (this.rng.next() < ITEM_DROP_CHANCE) {
+          const itemType = this.rollItemType();
+          const itemId = `i${++this.itemCounter}`;
+          this.items.set(itemId, { id: itemId, x: t.x, y: t.y, itemType });
+          this.sendEvent('ItemSpawned', { id: itemId, x: t.x, y: t.y, itemType });
+        }
+      }
+
+      // Trap players
       for (const p of this.players.values()) {
         if (p.state !== 'Alive') continue;
         if (this.tick < p.invulnUntilTick) continue;
