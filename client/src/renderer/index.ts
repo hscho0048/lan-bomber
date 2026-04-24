@@ -25,6 +25,7 @@ import {
 } from './lobbyView';
 import { createLogger } from './logger';
 import { createGameState, type GameState, type Notification, type BalloonKickAnim, type BossLaserAnim } from './state';
+import { bgmPlay, bgmStop } from './bgm';
 
 const el = getRendererElements();
 const ctx = el.canvas.getContext('2d')!;
@@ -115,6 +116,7 @@ function onEvent(ev: EventMessagePayload, gs: GameState): void {
       endMsg = ev.payload.winnerId === gs.myId ? '우승! 🎉' : '게임 종료';
     }
 
+    bgmStop();
     gs.roundEnd = { msg: endMsg, at: performance.now() };
 
     // Prepare result screen in background
@@ -213,6 +215,7 @@ function handleServerMessage(rawData: string, gs: GameState): void {
       gs.balloonKickAnims.clear();
       gs.bossLasers = [];
       logLine('info', `StartGame: map=${gs.startGame.mapId} mode=${gs.startGame.mode} duration=${gs.startGame.gameDurationSeconds}s`);
+      bgmPlay();
       setScreen(el, 'game');
       break;
     }
@@ -603,6 +606,7 @@ function bindRoomScreen(): void {
 
 function bindGameScreen(): void {
   el.btnLeave.onclick = () => {
+    bgmStop();
     disconnect();
     state.startGame = null;
     state.snap.prev = null;
